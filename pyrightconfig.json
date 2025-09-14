@@ -1,0 +1,12 @@
+{
+  "typeCheckingMode": "strict",
+  "reportUnknownMemberType": false,
+  "reportUnknownVariableType": true,
+  "reportUnknownParameterType": true,
+  "reportMissingTypeArgument": true,
+  "reportIncompatibleMethodOverride": true,
+  "reportOptionalMemberAccess": true,
+  "executionEnvironments": [
+    { "root": "." }
+  ]
+}
