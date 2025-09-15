@@ -126,10 +126,55 @@ def lock_button_for(line_edit: QLineEdit) -> QPushButton:
             # lock
             set_enabled(line_edit, False)
             setattr(line_edit, '_just_unlocked', False)
+            # remove any temporary handler if present
+            h = getattr(line_edit, '_just_unlocked_handler', None)
+            if h is not None:
+                try:
+                    line_edit.textEdited.disconnect(h)
+                except Exception:
+                    pass
+                try:
+                    delattr(line_edit, '_just_unlocked_handler')
+                except Exception:
+                    pass
         else:
-            # unlock — set a flag so that immediate editingFinished won't auto-disable
-            setattr(line_edit, '_just_unlocked', True)
+            # unlock — prepare flags so that an immediate editingFinished (without user typing)
+            # won't auto-disable, but a real typed edit followed by editingFinished will.
             set_enabled(line_edit, True)
+            try:
+                # waiting flag indicates we recently unlocked and expect possible typing
+                setattr(line_edit, '_just_unlocked_waiting', True)
+                # clear typed flag
+                if hasattr(line_edit, '_just_unlocked_typed'):
+                    delattr(line_edit, '_just_unlocked_typed')
+            except Exception:
+                pass
+
+            def _on_text_edited(_text: str) -> None:
+                # mark that the user actually typed
+                try:
+                    setattr(line_edit, '_just_unlocked_typed', True)
+                finally:
+                    try:
+                        line_edit.textEdited.disconnect(_on_text_edited)
+                    except Exception:
+                        pass
+                    try:
+                        if hasattr(line_edit, '_just_unlocked_handler'):
+                            delattr(line_edit, '_just_unlocked_handler')
+                    except Exception:
+                        pass
+
+            # store handler reference for cleanup and connect
+            try:
+                setattr(line_edit, '_just_unlocked_handler', _on_text_edited)
+                line_edit.textEdited.connect(_on_text_edited)
+            except Exception:
+                try:
+                    if hasattr(line_edit, '_just_unlocked_handler'):
+                        delattr(line_edit, '_just_unlocked_handler')
+                except Exception:
+                    pass
 
     btn.clicked.connect(on_click)
     # initial text reflects current state
@@ -141,10 +186,22 @@ def lock_button_for(line_edit: QLineEdit) -> QPushButton:
 
 def auto_disable_handler(line_edit: QLineEdit) -> Callable[[], None]:
     def _handler() -> None:
-        # if we just unlocked for editing, skip auto-disable once
-        if getattr(line_edit, '_just_unlocked', False):
-            line_edit._just_unlocked = False
-            return
+        # if we just unlocked for editing, only skip auto-disable when no typing occurred
+        if getattr(line_edit, '_just_unlocked_waiting', False):
+            # if user typed, proceed to disable and clear flags
+            if getattr(line_edit, '_just_unlocked_typed', False):
+                try:
+                    delattr(line_edit, '_just_unlocked_typed')
+                except Exception:
+                    pass
+                try:
+                    delattr(line_edit, '_just_unlocked_waiting')
+                except Exception:
+                    pass
+                # allow auto-disable to proceed
+            else:
+                # user didn't type yet — skip disabling for now
+                return
         set_enabled(line_edit, False)
     return _handler
 
@@ -550,7 +607,7 @@ class MixPanel:
 class HydroPanel(QGroupBox):
     def __init__(self, title: str = "Гидродинамика потоков", parent: Optional[QWidget] = None):
         super().__init__(title, parent)
-        base = os.path.dirname(os.path.abspath(__file__))
+        base = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'assets', 'images')
         self._images = {
             "mix_mix": os.path.join(base,"one.png"),
             "parallel": os.path.join(base,"two.png"),
@@ -661,9 +718,9 @@ class MainWindow(QMainWindow):
         # смеси
         row2 = QHBoxLayout(); layout.addLayout(row2)
         self.cold_mix = MixPanel("холодного потока", is_hot=False,
-                                 export_path=r"C:\Users\ruben\OneDrive\Documents\Projects\Python\aspaProj\cold_mix.csv")
+                                 export_path=os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'csv', 'cold_mix.csv'))
         self.hot_mix  = MixPanel("горячего потока",  is_hot=True,
-                                 export_path=r"C:\Users\ruben\OneDrive\Documents\Projects\aspaProj\hot_mix.csv")
+                                 export_path=os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'csv', 'hot_mix.csv'))
         row2.addWidget(self.cold_mix.widget()); row2.addWidget(self.hot_mix.widget())
 
         # гидродинамика + правый столбец (OutputPanel + кнопки)
