@@ -1,8 +1,7 @@
 # interface.py
 import os
-import sys
 import csv
-from typing import Callable, TypedDict, Any, List, Dict, Optional
+from typing import Callable, TypedDict, Any, List, Dict, Optional, Sequence, cast
 
 from PyQt5.QtGui import (
     QFont,
@@ -20,7 +19,6 @@ from PyQt5.QtCore import (
     QSortFilterProxyModel,
 )
 from PyQt5.QtWidgets import (
-    QApplication,
     QMainWindow,
     QWidget,
     QVBoxLayout,
@@ -38,9 +36,16 @@ from PyQt5.QtWidgets import (
     QHeaderView,
     QTableView,
     QFrame,
+    QAction,
+    QFileDialog,
 )
 
 import logic  # модуль расчётов
+try:
+    import openpyxl  # type: ignore
+except Exception:
+    openpyxl = None
+    # Workbook will be created via openpyxl.Workbook() when module is present
 
 # ===================== БАЗА СВОЙСТВ КОМПОНЕНТОВ =====================
 COMPONENT_DB = {
@@ -392,7 +397,7 @@ class MixModel(QStandardItemModel):
     ]
     SORT_ROLE = Qt.UserRole + 1
 
-    def __init__(self, parent=None):
+    def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(0, 6, parent)
         for i, h in enumerate(self.HEADERS):
             self.setHeaderData(i, Qt.Horizontal, h, role=Qt.DisplayRole)
@@ -451,21 +456,19 @@ class MixModel(QStandardItemModel):
         out: List[MixRow] = []
         for r in range(self.rowCount()):
 
-            def v(c):
+            def v(c: int):
                 txt = self.data(self.index(r, c), Qt.DisplayRole) or "0"
                 return float(txt.replace(",", ".")) if c != self.COL_NAME else txt
 
             out.append(
-                MixRow(
-                    {
-                        "name": v(self.COL_NAME),  # type: ignore[arg-type]
-                        "share": v(self.COL_SHARE),  # type: ignore[arg-type]
-                        "tb": v(self.COL_TB),  # type: ignore[arg-type]
-                        "cf": v(self.COL_CF),  # type: ignore[arg-type]
-                        "cp": v(self.COL_CP),  # type: ignore[arg-type]
-                        "rf": v(self.COL_RF),  # type: ignore[arg-type]
-                    }
-                )
+                cast(MixRow, {
+                    "name": v(self.COL_NAME),
+                    "share": v(self.COL_SHARE),
+                    "tb": v(self.COL_TB),
+                    "cf": v(self.COL_CF),
+                    "cp": v(self.COL_CP),
+                    "rf": v(self.COL_RF),
+                })
             )
         return out
 
@@ -638,7 +641,7 @@ class MixPanel:
                         if c != 0:
                             txt = txt.replace(".", ",")
                         row.append(txt)
-                    wr.writerow(row)
+                    wr.writerow(cast(List[str], row))
         except Exception:
             pass
 
@@ -829,15 +832,31 @@ class HydroPanel(QGroupBox):
         self.image_label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         right.addWidget(self.image_label, 0, Qt.AlignVCenter | Qt.AlignHCenter)
 
-        self.rb_mix_mix.toggled.connect(lambda on: on and self._set_mode("mix_mix"))
-        self.rb_parallel.toggled.connect(lambda on: on and self._set_mode("parallel"))
-        self.rb_mix_cold.toggled.connect(
-            lambda on: on and self._set_mode("mix_cold_disp_hot")
-        )
-        self.rb_mix_hot.toggled.connect(
-            lambda on: on and self._set_mode("mix_hot_disp_cold")
-        )
-        self.rb_counter.toggled.connect(lambda on: on and self._set_mode("counter"))
+        def _on_rb_mix_mix_toggled(on: bool) -> None:
+            if on:
+                self._set_mode("mix_mix")
+
+        def _on_rb_parallel_toggled(on: bool) -> None:
+            if on:
+                self._set_mode("parallel")
+
+        def _on_rb_mix_cold_toggled(on: bool) -> None:
+            if on:
+                self._set_mode("mix_cold_disp_hot")
+
+        def _on_rb_mix_hot_toggled(on: bool) -> None:
+            if on:
+                self._set_mode("mix_hot_disp_cold")
+
+        def _on_rb_counter_toggled(on: bool) -> None:
+            if on:
+                self._set_mode("counter")
+
+        self.rb_mix_mix.toggled.connect(_on_rb_mix_mix_toggled)
+        self.rb_parallel.toggled.connect(_on_rb_parallel_toggled)
+        self.rb_mix_cold.toggled.connect(_on_rb_mix_cold_toggled)
+        self.rb_mix_hot.toggled.connect(_on_rb_mix_hot_toggled)
+        self.rb_counter.toggled.connect(_on_rb_counter_toggled)
 
         self.rb_mix_mix.setChecked(True)
         self._set_mode("mix_mix")
@@ -925,6 +944,7 @@ class OutputPanel(QGroupBox):
         set_enabled(self.sigma, False)
         self.k.setText("0.0")
         set_enabled(self.k, False)
+
     # schema label removed
 
 
@@ -932,12 +952,34 @@ class OutputPanel(QGroupBox):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
+        # flag to indicate we are currently importing data (suppress full on_calc triggers)
+        self._importing = False
+        # after importing, suppress full sigma/K calculation on schema toggle until user presses Calculate
+        self._suppress_full_calc_after_import = False
         self.setWindowTitle("Двухпоточный теплообмен")
         self.setFixedSize(1600, 875)
         # статусная строка
         self.status = self.statusBar()
         try:
             self.status.showMessage("Готово")
+        except Exception:
+            pass
+
+        # File menu: Import/Export inputs (JSON)
+        try:
+            file_menu = self.menuBar().addMenu("Файл")
+            imp_act = QAction("Импорт входных данных...", self)
+            exp_act = QAction("Экспорт входных данных...", self)
+            imp_xlsx = QAction("Импорт из Excel (.xlsx)...", self)
+            exp_xlsx = QAction("Экспорт в Excel (.xlsx)...", self)
+            file_menu.addAction(imp_act)
+            file_menu.addAction(exp_act)
+            file_menu.addAction(imp_xlsx)
+            file_menu.addAction(exp_xlsx)
+            imp_act.triggered.connect(self.import_inputs)  # type: ignore[call-arg]
+            exp_act.triggered.connect(self.export_inputs)  # type: ignore[call-arg]
+            imp_xlsx.triggered.connect(self.import_inputs_xlsx)  # type: ignore[call-arg]
+            exp_xlsx.triggered.connect(self.export_inputs_xlsx)  # type: ignore[call-arg]
         except Exception:
             pass
 
@@ -979,12 +1021,12 @@ class MainWindow(QMainWindow):
 
         # connect mix model changes to update button state and attempt minimal auto-calc
         try:
-            self.cold_mix.model.dataChanged.connect(self._on_mix_changed)
-            self.cold_mix.model.rowsInserted.connect(self._on_mix_changed)
-            self.cold_mix.model.rowsRemoved.connect(self._on_mix_changed)
-            self.hot_mix.model.dataChanged.connect(self._on_mix_changed)
-            self.hot_mix.model.rowsInserted.connect(self._on_mix_changed)
-            self.hot_mix.model.rowsRemoved.connect(self._on_mix_changed)
+            self.cold_mix.model.dataChanged.connect(self._on_mix_changed)  # type: ignore[call-arg]
+            self.cold_mix.model.rowsInserted.connect(self._on_mix_changed)  # type: ignore[call-arg]
+            self.cold_mix.model.rowsRemoved.connect(self._on_mix_changed)  # type: ignore[call-arg]
+            self.hot_mix.model.dataChanged.connect(self._on_mix_changed)  # type: ignore[call-arg]
+            self.hot_mix.model.rowsInserted.connect(self._on_mix_changed)  # type: ignore[call-arg]
+            self.hot_mix.model.rowsRemoved.connect(self._on_mix_changed)  # type: ignore[call-arg]
         except Exception:
             pass
 
@@ -1016,8 +1058,15 @@ class MainWindow(QMainWindow):
         row3.addLayout(right_col, 0)
 
         # связи
-        self.calc_btn.clicked.connect(self.on_calc)
-        self.reset_btn.clicked.connect(self.on_reset)
+        try:
+            # Explicit user click should clear import suppression and run full calc
+            self.calc_btn.clicked.connect(self._on_calc_button_clicked)
+        except Exception:
+            pass
+        try:
+            self.reset_btn.clicked.connect(self.on_reset)
+        except Exception:
+            pass
         # автопересчёт при смене схемы если есть пред. результат
         try:
             for rb in (
@@ -1027,15 +1076,15 @@ class MainWindow(QMainWindow):
                 self.hydro.rb_mix_hot,
                 self.hydro.rb_counter,
             ):
-                rb.toggled.connect(self._on_schema_changed)
+                rb.toggled.connect(self._on_schema_changed)  # type: ignore[call-arg]
         except Exception:
             pass
         # взаимная блокировка: ввод Q блокирует T+out и наоборот
         try:
             # используем editingFinished — расчёт выполняется после завершения ввода
-            self.out_panel.q.editingFinished.connect(self._on_q_edit_finished)
+            self.out_panel.q.editingFinished.connect(self._on_q_edit_finished)  # type: ignore[call-arg]
             self.hot_panel.t_out.editingFinished.connect(
-                self._on_tplus_out_edit_finished
+                self._on_tplus_out_edit_finished  # type: ignore[call-arg]
             )
         except Exception:
             pass
@@ -1070,13 +1119,13 @@ class MainWindow(QMainWindow):
                 # connect editingFinished if available
                 if hasattr(w, "editingFinished"):
                     try:
-                        w.editingFinished.connect(self._update_calc_button_state)
+                        w.editingFinished.connect(self._update_calc_button_state)  # type: ignore[call-arg]
                     except Exception:
                         pass
                 # connect dataChanged if available (models)
                 if hasattr(w, "dataChanged"):
                     try:
-                        w.dataChanged.connect(self._update_calc_button_state)
+                        w.dataChanged.connect(self._update_calc_button_state)  # type: ignore[call-arg]
                     except Exception:
                         pass
         except Exception:
@@ -1085,7 +1134,7 @@ class MainWindow(QMainWindow):
         # initial update of button state
         self._update_calc_button_state()
 
-    def _on_mix_changed(self, *args) -> None:
+    def _on_mix_changed(self, *args: Any) -> None:
         """Handler for mix model changes: update calc button and attempt minimal auto-calc."""
         try:
             self._update_calc_button_state()
@@ -1096,29 +1145,448 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
+    def _on_calc_button_clicked(self) -> None:
+        """Handler for explicit user click on Calculate: clear import suppression and run full calculation."""
+        try:
+            self._suppress_full_calc_after_import = False
+        except Exception:
+            pass
+        try:
+            self.on_calc()
+        except Exception:
+            pass
+
+    def _on_schema_changed(self, checked: bool) -> None:
+        """Called when hydro schema radio buttons toggle.
+        Always trigger a recalculation when the schema changes (user expects σ/K to update).
+        """
+        try:
+            if not checked:
+                return
+            # During import or immediately after import we only want minimal auto-fill
+            # (t_out or q), not full sigma/K calculation.
+            if getattr(self, "_importing", False) or getattr(self, "_suppress_full_calc_after_import", False):
+                try:
+                    self._try_auto_calc()
+                except Exception:
+                    pass
+                return
+            try:
+                self.on_calc()
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def _gather_inputs_for_export(self) -> Dict[str, Any]:
+        """Collect current inputs into a JSON-serializable dict."""
+        try:
+            cold = self.cold_panel.to_dict()
+        except Exception:
+            cold = {}
+        try:
+            hot = self.hot_panel.to_dict()
+        except Exception:
+            hot = {}
+        try:
+            cold_mix = self.cold_mix.mix_rows()
+        except Exception:
+            cold_mix = []
+        try:
+            hot_mix = self.hot_mix.mix_rows()
+        except Exception:
+            hot_mix = []
+        schema = None
+        try:
+            schema = self.hydro.current_schema()
+        except Exception:
+            schema = None
+        q_txt = None
+        try:
+            q_txt = self.out_panel.q.text().strip()
+        except Exception:
+            q_txt = None
+        return {
+            "cold": cold,
+            "hot": hot,
+            "cold_mix": cold_mix,
+            "hot_mix": hot_mix,
+            "schema": schema,
+            "q": q_txt,
+        }
+
+    def export_inputs(self) -> None:
+        """Export inputs to a CSV file that can be opened in Excel.
+        Format: a single CSV with a leading `section` column. Sections:
+        - flow_cold: columns t_in,t_out,m,p
+        - flow_hot: columns t_in,t_out,m,p
+        - mix_cold / mix_hot: columns name,share,tb,cf,cp,rf
+        """
+        try:
+            path, _ = QFileDialog.getSaveFileName(self, "Экспорт входных данных", "", "CSV Files (*.csv);;All Files (*)")
+            if not path:
+                return
+            data = self._gather_inputs_for_export()
+            # Helper to protect Excel from auto-formatting values (dates/numbers)
+            def protect_for_excel(val: Any) -> str:
+                s = str(val)
+                if not s:
+                    return ""
+                # Common date-like patterns with / or - or mm/dd or dd-mm etc.
+                if any(ch in s for ch in ("/", "-")) and any(c.isdigit() for c in s):
+                    return "'" + s
+                # Leading zeros or long numeric strings -> keep as text
+                if s.startswith("0") and len(s) > 1 and s[1].isdigit():
+                    return "'" + s
+                return s
+            with open(path, "w", newline="", encoding="utf-8-sig") as f:
+                w = csv.writer(f, delimiter=";")
+                # flows
+                w.writerow(["section", "t_in", "t_out", "m", "p"])
+                w.writerow(["type", "K", "K", "kg/s", "kg/m^2"])
+                cold = cast(Dict[str, Any], data.get("cold") or {})
+                hot = cast(Dict[str, Any], data.get("hot") or {})
+                w.writerow(["flow_cold", protect_for_excel(cold.get("t_in", "")), protect_for_excel(cold.get("t_out", "")), protect_for_excel(cold.get("m", "")), protect_for_excel(cold.get("p", ""))])
+                w.writerow(["flow_hot", protect_for_excel(hot.get("t_in", "")), protect_for_excel(hot.get("t_out", "")), protect_for_excel(hot.get("m", "")), protect_for_excel(hot.get("p", ""))])
+                # mixes
+                w.writerow([])
+                w.writerow(["section", "name", "share", "tb", "cf", "cp", "rf"])
+                w.writerow(["type", "str", "fraction", "K", "kJ/kg*K", "kJ/kg*K", "kJ/kg"])
+                for r in data.get("cold_mix", []):
+                    w.writerow(["mix_cold", protect_for_excel(r.get("name", "")), protect_for_excel(r.get("share", "")), protect_for_excel(r.get("tb", "")), protect_for_excel(r.get("cf", "")), protect_for_excel(r.get("cp", "")), protect_for_excel(r.get("rf", ""))])
+                for r in data.get("hot_mix", []):
+                    w.writerow(["mix_hot", protect_for_excel(r.get("name", "")), protect_for_excel(r.get("share", "")), protect_for_excel(r.get("tb", "")), protect_for_excel(r.get("cf", "")), protect_for_excel(r.get("cp", "")), protect_for_excel(r.get("rf", ""))])
+                # schema and q
+                w.writerow([])
+                w.writerow(["meta", "schema", data.get("schema", "")])
+                w.writerow(["meta", "q", data.get("q", "")])
+        except Exception as e:
+            QMessageBox.warning(self, "Ошибка экспорта", str(e))
+
+    def export_inputs_xlsx(self) -> None:
+        """Export inputs to an .xlsx workbook with separate sheets for flows and mixes."""
+        if openpyxl is None:
+            QMessageBox.warning(self, "Excel экспорт", "Требуется пакет openpyxl. Установите его в окружение.")
+            return
+        try:
+            path, _ = QFileDialog.getSaveFileName(self, "Экспорт в Excel", "", "Excel Files (*.xlsx);;All Files (*)")
+            if not path:
+                return
+            data = self._gather_inputs_for_export()
+            # create workbook via module to satisfy static checkers
+            wb = openpyxl.Workbook()
+            # Flows sheet
+            ws1 = cast(Any, wb.active)
+            ws1.title = "flows"
+            ws1.append(["section", "t_in", "t_out", "m", "p"])
+            cold = cast(Dict[str, Any], data.get("cold") or {})
+            hot = cast(Dict[str, Any], data.get("hot") or {})
+            ws1.append(["flow_cold", cold.get("t_in", ""), cold.get("t_out", ""), cold.get("m", ""), cold.get("p", "")])
+            ws1.append(["flow_hot", hot.get("t_in", ""), hot.get("t_out", ""), hot.get("m", ""), hot.get("p", "")])
+            # mixes
+            ws2 = wb.create_sheet("mix_cold")
+            ws2.append(["name", "share", "tb", "cf", "cp", "rf"])
+            for r in data.get("cold_mix", []):
+                ws2.append([r.get("name", ""), r.get("share", ""), r.get("tb", ""), r.get("cf", ""), r.get("cp", ""), r.get("rf", "")])
+            ws3 = wb.create_sheet("mix_hot")
+            ws3.append(["name", "share", "tb", "cf", "cp", "rf"])
+            for r in data.get("hot_mix", []):
+                ws3.append([r.get("name", ""), r.get("share", ""), r.get("tb", ""), r.get("cf", ""), r.get("cp", ""), r.get("rf", "")])
+            # meta
+            ws_meta = wb.create_sheet("meta")
+            ws_meta.append(["schema", data.get("schema", "")])
+            ws_meta.append(["q", data.get("q", "")])
+            wb.save(path)
+        except Exception as e:
+            QMessageBox.warning(self, "Ошибка экспорта Excel", str(e))
+
+    def import_inputs_xlsx(self) -> None:
+        """Import inputs from an .xlsx workbook created by `export_inputs_xlsx`."""
+        if openpyxl is None:
+            QMessageBox.warning(self, "Excel импорт", "Требуется пакет openpyxl. Установите его в окружение.")
+            return
+        try:
+            self._importing = True
+            path, _ = QFileDialog.getOpenFileName(self, "Импорт из Excel", "", "Excel Files (*.xlsx);;All Files (*)")
+            if not path:
+                return
+            wb = openpyxl.load_workbook(path, data_only=True)
+            assert openpyxl is not None
+            # flows
+            if "flows" in wb.sheetnames:
+                ws = cast(Any, wb["flows"])
+                rows = list(ws.values)
+                # expect header then two rows
+                if len(rows) >= 3:
+                    fc = rows[1]
+                    fh = rows[2]
+                    # safe extraction from tuples that may have variable length
+                    from typing import Optional, Sequence
+
+                    def safe_get(cell_tuple: Optional[Sequence[Any]], idx: int, default: str = "") -> str:
+                        try:
+                            if not cell_tuple or len(cell_tuple) <= idx:
+                                return default
+                            v = cell_tuple[idx]
+                            return "" if v is None else str(v)
+                        except Exception:
+                            return default
+
+                    self.cold_panel.t_in.setText(safe_get(fc, 1))
+                    self.cold_panel.t_out.setText(safe_get(fc, 2))
+                    self.cold_panel.m.setText(safe_get(fc, 3))
+                    self.cold_panel.p.setText(safe_get(fc, 4))
+
+                    self.hot_panel.t_in.setText(safe_get(fh, 1))
+                    self.hot_panel.t_out.setText(safe_get(fh, 2))
+                    self.hot_panel.m.setText(safe_get(fh, 3))
+                    self.hot_panel.p.setText(safe_get(fh, 4))
+            # mixes
+            for name, target in (("mix_cold", self.cold_mix), ("mix_hot", self.hot_mix)):
+                if name in wb.sheetnames:
+                    try:
+                        ws = cast(Any, wb[name])
+                        rows = list(ws.values)[1:]
+                        if target.model.rowCount() > 0:
+                            target.model.removeRows(0, target.model.rowCount())
+
+                        def cell_to_float(val: Any) -> float:
+                            try:
+                                if val is None:
+                                    return 0.0
+                                return float(val)
+                            except Exception:
+                                return 0.0
+
+                        def cell_to_str(val: Any) -> str:
+                            try:
+                                if val is None:
+                                    return ""
+                                return str(val)
+                            except Exception:
+                                return ""
+
+                        for row in rows:
+                            try:
+                                nm = cell_to_str(row[0]) if row and len(row) > 0 else ""
+                                share = cell_to_float(row[1]) if row and len(row) > 1 else 0.0
+                                tb = cell_to_float(row[2]) if row and len(row) > 2 else 0.0
+                                cf = cell_to_float(row[3]) if row and len(row) > 3 else 0.0
+                                cp = cell_to_float(row[4]) if row and len(row) > 4 else 0.0
+                                rf = cell_to_float(row[5]) if row and len(row) > 5 else 0.0
+                                target.model.add_or_update(nm, share, tb, cf, cp, rf)
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+            # meta
+            if "meta" in wb.sheetnames:
+                try:
+                    ws = wb["meta"]
+                    rows = list(ws.values)
+                    for r in rows:
+                        if not r or len(r) == 0:
+                            continue
+                        if len(r) > 0 and r[0] == "schema":
+                            schema_val = r[1] if len(r) > 1 else None
+                            if schema_val:
+                                if schema_val == "Schema1":
+                                    self.hydro.rb_mix_mix.setChecked(True)
+                                elif schema_val == "Schema2":
+                                    self.hydro.rb_parallel.setChecked(True)
+                                elif schema_val == "Schema3":
+                                    self.hydro.rb_mix_cold.setChecked(True)
+                                elif schema_val == "Schema4":
+                                    self.hydro.rb_mix_hot.setChecked(True)
+                                elif schema_val == "Schema5":
+                                    self.hydro.rb_counter.setChecked(True)
+                        if len(r) > 0 and r[0] == "q":
+                            try:
+                                if len(r) > 1:
+                                    self.out_panel.q.setText(str(r[1] or ""))
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+            try:
+                self._try_auto_calc()
+                self._update_calc_button_state()
+            except Exception:
+                pass
+            try:
+                self._suppress_full_calc_after_import = True
+            except Exception:
+                pass
+        except Exception as e:
+            QMessageBox.warning(self, "Ошибка импорта Excel", str(e))
+        finally:
+            try:
+                self._importing = False
+            except Exception:
+                pass
+
+    def import_inputs(self) -> None:
+        """Import inputs from a CSV file with the format written by export_inputs().
+        During import only minimal auto-fill is performed (t_out or q). Full sigma/K
+        calculation is not executed; user should press "Вычислить" to compute σ и K.
+        """
+        flows: Dict[str, Dict[str, str]] = {"flow_cold": {}, "flow_hot": {}}
+        cold_mix: List[Dict[str, Any]] = []
+        hot_mix: List[Dict[str, Any]] = []
+        schema_val: Optional[str] = None
+        q_val: Optional[str] = None
+        try:
+            self._importing = True
+            path, _ = QFileDialog.getOpenFileName(self, "Импорт входных данных", "", "CSV Files (*.csv);;All Files (*)")
+            if not path:
+                return
+            with open(path, "r", encoding="utf-8-sig") as f:
+                rdr = csv.reader(f, delimiter=";")
+                for row in rdr:
+                    if not row:
+                        continue
+                    first = row[0].strip()
+                    if first.lower() == "section":
+                        continue
+                    if first in ("flow_cold", "flow_hot"):
+                        # strip leading apostrophe inserted to protect Excel-format
+                        def strip_protect(x: str) -> str:
+                            if x.startswith("'"):
+                                return x[1:]
+                            return x
+
+                        flows[first]["t_in"] = strip_protect(row[1]) if len(row) > 1 else ""
+                        flows[first]["t_out"] = strip_protect(row[2]) if len(row) > 2 else ""
+                        flows[first]["m"] = strip_protect(row[3]) if len(row) > 3 else ""
+                        flows[first]["p"] = strip_protect(row[4]) if len(row) > 4 else ""
+                        continue
+                    if first in ("mix_cold", "mix_hot"):
+                        name = row[1] if len(row) > 1 else ""
+                        share = row[2] if len(row) > 2 else "0"
+                        tb = row[3] if len(row) > 3 else "0"
+                        cf = row[4] if len(row) > 4 else "0"
+                        cp = row[5] if len(row) > 5 else "0"
+                        rf = row[6] if len(row) > 6 else "0"
+                        try:
+                            rec = {
+                                "name": name,
+                                "share": float(share.replace(",", ".")),
+                                "tb": float(tb.replace(",", ".")),
+                                "cf": float(cf.replace(",", ".")),
+                                "cp": float(cp.replace(",", ".")),
+                                "rf": float(rf.replace(",", ".")),
+                            }
+                        except Exception:
+                            rec = {"name": name, "share": 0.0, "tb": 0.0, "cf": 0.0, "cp": 0.0, "rf": 0.0}
+                        if first == "mix_cold":
+                            cold_mix.append(rec)
+                        else:
+                            hot_mix.append(rec)
+                        continue
+                    if first == "meta":
+                        key = row[1] if len(row) > 1 else ""
+                        val = row[2] if len(row) > 2 else ""
+                        if key == "schema":
+                            schema_val = val
+                        elif key == "q":
+                            q_val = val
+
+            # populate flows
+            fc = flows.get("flow_cold", {})
+            if fc:
+                self.cold_panel.t_in.setText(str(fc.get("t_in", "")))
+                self.cold_panel.t_out.setText(str(fc.get("t_out", "")))
+                self.cold_panel.m.setText(str(fc.get("m", "")))
+                self.cold_panel.p.setText(str(fc.get("p", "")))
+            fh = flows.get("flow_hot", {})
+            if fh:
+                self.hot_panel.t_in.setText(str(fh.get("t_in", "")))
+                self.hot_panel.t_out.setText(str(fh.get("t_out", "")))
+                self.hot_panel.m.setText(str(fh.get("m", "")))
+                self.hot_panel.p.setText(str(fh.get("p", "")))
+
+            # replace mixes
+            if self.cold_mix.model.rowCount() > 0:
+                self.cold_mix.model.removeRows(0, self.cold_mix.model.rowCount())
+            for r in cold_mix:
+                try:
+                    self.cold_mix.model.add_or_update(r.get("name", ""), float(r.get("share", 0.0) or 0.0), float(r.get("tb", 0.0) or 0.0), float(r.get("cf", 0.0) or 0.0), float(r.get("cp", 0.0) or 0.0), float(r.get("rf", 0.0) or 0.0))
+                except Exception:
+                    pass
+            if self.hot_mix.model.rowCount() > 0:
+                self.hot_mix.model.removeRows(0, self.hot_mix.model.rowCount())
+            for r in hot_mix:
+                try:
+                    self.hot_mix.model.add_or_update(r.get("name", ""), float(r.get("share", 0.0) or 0.0), float(r.get("tb", 0.0) or 0.0), float(r.get("cf", 0.0) or 0.0), float(r.get("cp", 0.0) or 0.0), float(r.get("rf", 0.0) or 0.0))
+                except Exception:
+                    pass
+
+            # set schema and q if present
+            if schema_val:
+                if schema_val == "Schema1":
+                    self.hydro.rb_mix_mix.setChecked(True)
+                elif schema_val == "Schema2":
+                    self.hydro.rb_parallel.setChecked(True)
+                elif schema_val == "Schema3":
+                    self.hydro.rb_mix_cold.setChecked(True)
+                elif schema_val == "Schema4":
+                    self.hydro.rb_mix_hot.setChecked(True)
+                elif schema_val == "Schema5":
+                    self.hydro.rb_counter.setChecked(True)
+            if q_val is not None:
+                self.out_panel.q.setText(str(q_val))
+
+            # normalize and attempt minimal auto-calc
+            try:
+                self._try_auto_calc()
+                self._update_calc_button_state()
+            except Exception:
+                pass
+            # suppress full sigma/K calculation on subsequent schema toggles until user confirms
+            try:
+                self._suppress_full_calc_after_import = True
+            except Exception:
+                pass
+        except Exception as e:
+            QMessageBox.warning(self, "Ошибка импорта", str(e))
+        finally:
+            try:
+                self._importing = False
+            except Exception:
+                pass
+
     def _can_compute_sigma_k(self) -> bool:
         """Return True if we have enough validated inputs to compute sigma and k."""
-        cold = self.cold_panel.to_dict()
-        hot = self.hot_panel.to_dict()
-        cold_mix = self.cold_mix.mix_rows()
-        hot_mix = self.hot_mix.mix_rows()
+        try:
+            cold = self.cold_panel.to_dict()
+            hot = self.hot_panel.to_dict()
+            cold_mix = self.cold_mix.mix_rows()
+            hot_mix = self.hot_mix.mix_rows()
 
-        def mix_valid(mix: list) -> bool:
-            try:
-                if not mix:
-                    return False
-                s = sum(float(item.get("share", 0.0)) for item in mix)
-                return abs(s - 1.0) <= 1e-3
-            except Exception:
+            # require Q present
+            if not self.out_panel.q.text().strip():
                 return False
 
-        # require Q present
-        if not self.out_panel.q.text().strip():
+            # require both streams to have t_in and t_out and m and valid mixes
+            cold_ok = (
+                bool(cold.get("t_in")) and bool(cold.get("t_out")) and bool(cold.get("m")) and self._mix_valid(cold_mix)
+            )
+            hot_ok = (
+                bool(hot.get("t_in")) and bool(hot.get("t_out")) and bool(hot.get("m")) and self._mix_valid(hot_mix)
+            )
+            return cold_ok and hot_ok
+        except Exception:
             return False
-        # require both streams to have t_in and t_out and m and valid mixes
-        cold_ok = (cold["t_in"] and cold["t_out"] and cold["m"]) and mix_valid(cold_mix)
-        hot_ok = (hot["t_in"] and hot["t_out"] and hot["m"]) and mix_valid(hot_mix)
-        return cold_ok and hot_ok
+
+    @staticmethod
+    def _mix_valid(mix: Sequence[MixRow]) -> bool:
+        try:
+            if not mix:
+                return False
+            s = sum(float(item.get("share", 0.0)) for item in mix)
+            return abs(s - 1.0) <= 1e-3
+        except Exception:
+            return False
 
     def _update_calc_button_state(self) -> None:
         """Highlight `self.calc_btn` when sigma/k can be computed by pressing it."""
@@ -1165,10 +1633,12 @@ class MainWindow(QMainWindow):
                         q=q_val,
                         schema=self.hydro.current_schema(),
                     )
-                    if isinstance(ans, dict) and "t_out_plus" in ans:
+                    ans = cast(Dict[str, Any], ans)
+                    ans_dict = ans
+                    if ans_dict and "t_out_plus" in ans_dict:
                         # временно блокируем сигналы при записи
                         self.hot_panel.t_out.blockSignals(True)
-                        self.hot_panel.t_out.setText(f"{ans['t_out_plus']:.6g}")
+                        self.hot_panel.t_out.setText(f"{ans_dict['t_out_plus']:.6g}")
                         self.hot_panel.t_out.blockSignals(False)
                         try:
                             self._update_calc_button_state()
@@ -1198,9 +1668,11 @@ class MainWindow(QMainWindow):
                         q=q_val,
                         schema=self.hydro.current_schema(),
                     )
-                    if isinstance(ans, dict) and "q" in ans:
+                    ans = cast(Dict[str, Any], ans)
+                    ans_dict = ans
+                    if ans_dict and "q" in ans_dict:
                         self.out_panel.q.blockSignals(True)
-                        self.out_panel.q.setText(f"{ans['q']:.6g}")
+                        self.out_panel.q.setText(f"{ans_dict['q']:.6g}")
                         self.out_panel.q.blockSignals(False)
                         try:
                             self._update_calc_button_state()
@@ -1210,6 +1682,9 @@ class MainWindow(QMainWindow):
             pass
 
     def on_calc(self) -> None:
+        # If suppression is active (import just happened), ignore programmatic calls.
+        if getattr(self, "_suppress_full_calc_after_import", False):
+            return
         cold = self.cold_panel.to_dict()
         hot = self.hot_panel.to_dict()
         cold_mix = self.cold_mix.mix_rows()
@@ -1228,20 +1703,35 @@ class MainWindow(QMainWindow):
                     q=q_val,
                     schema=schema,
                 )
-                if isinstance(ans, dict):
-                    if "sigma" in ans:
-                        self.out_panel.sigma.setText(format_num(ans["sigma"]))
-                        set_enabled(self.out_panel.sigma, False)
-                    if "k" in ans:
-                        self.out_panel.k.setText(format_num(ans["k"]))
-                        set_enabled(self.out_panel.k, False)
-                    # статус (не использовать слово "Schema" в выводе)
+                ans = cast(Dict[str, Any], ans)
+                if ans:
+                    # safely extract numeric/string values from ans
                     try:
-                        k_src = ans.get("k_source", "")
-                        contact = ans.get("contact_type", "")
-                        q_show = ans.get("q", q_val)
-                        k_show = ans.get("k", 0.0)
-                        s_show = ans.get("sigma", 0.0)
+                        sigma_val = float(ans.get("sigma", 0.0)) if ans.get("sigma") is not None else 0.0
+                    except Exception:
+                        sigma_val = 0.0
+                    try:
+                        k_val = float(ans.get("k", 0.0)) if ans.get("k") is not None else 0.0
+                    except Exception:
+                        k_val = 0.0
+                    if sigma_val:
+                        self.out_panel.sigma.setText(format_num(sigma_val))
+                        set_enabled(self.out_panel.sigma, False)
+                    if k_val:
+                        self.out_panel.k.setText(format_num(k_val))
+                        set_enabled(self.out_panel.k, False)
+
+                    # статус (не использовать слово "Schema" в выводе)
+                    schema_display = schema
+                    contact = ""
+                    q_show = q_val
+                    s_show = 0.0
+                    try:
+                        k_src = str(ans.get("k_source", ""))
+                        contact = str(ans.get("contact_type", ""))
+                        q_show = float(ans.get("q", q_val) or q_val)
+                        k_show = k_val
+                        s_show = sigma_val
                         schema_display = str(ans.get("schema", schema))
                         msg = f"{schema_display}  contact={contact or '-'}  k_source={k_src or '-'}  Q={q_show:.4g}  K={k_show:.4g}  σ={s_show:.4g}"
                         self.status.showMessage(msg)
@@ -1251,7 +1741,11 @@ class MainWindow(QMainWindow):
                     # Если σ посчитана, но K отсутствует, попробуем ещё раз выполнить расчёт (возможно
                     # теперь доступны дополнительные данные после записи t_out или q) и получить K.
                     try:
-                        if isinstance(ans, dict) and ("sigma" in ans) and (not ans.get("k")):
+                        if (
+                            ans
+                            and ("sigma" in ans)
+                            and (not ans.get("k"))
+                        ):
                             # reload inputs (t_out/q might have been filled above)
                             cold2 = self.cold_panel.to_dict()
                             hot2 = self.hot_panel.to_dict()
@@ -1268,20 +1762,26 @@ class MainWindow(QMainWindow):
                                     q=q2,
                                     schema=schema,
                                 )
-                                if isinstance(ans2, dict) and ans2.get("k"):
-                                    self.out_panel.k.setText(format_num(ans2.get("k")))
-                                    set_enabled(self.out_panel.k, False)
-                                    # update status with new k info
+                                ans2 = cast(Dict[str, Any], ans2)
+                                if ans2 and ans2.get("k"):
                                     try:
-                                        k_src2 = ans2.get("k_source", "")
-                                        k_show2 = ans2.get("k", 0.0)
-                                        msg2 = f"{schema_display}  contact={contact or '-'}  k_source={k_src2 or '-'}  Q={q_show:.4g}  K={k_show2:.4g}  σ={s_show:.4g}"
-                                        self.status.showMessage(msg2)
+                                        k2_val = float(ans2.get("k", 0.0) or 0.0)
                                     except Exception:
-                                        pass
+                                        k2_val = 0.0
+                                    if k2_val:
+                                        self.out_panel.k.setText(format_num(k2_val))
+                                        set_enabled(self.out_panel.k, False)
+                                        # update status with new k info
+                                        try:
+                                            k_src2 = str(ans2.get("k_source", ""))
+                                            k_show2 = k2_val
+                                            msg2 = f"{schema_display}  contact={contact or '-'}  k_source={k_src2 or '-'}  Q={q_show:.4g}  K={k_show2:.4g}  σ={s_show:.4g}"
+                                            self.status.showMessage(msg2)
+                                        except Exception:
+                                            pass
                     except Exception:
                         pass
-                if isinstance(ans, dict) and "q" in ans:
+                if ans and "q" in ans:
                     # записываем Q и делаем T+out недоступным для ввода
                     try:
                         self.out_panel.q.blockSignals(True)
@@ -1290,7 +1790,7 @@ class MainWindow(QMainWindow):
                     except Exception:
                         pass
                     set_enabled(self.hot_panel.t_out, False)
-                if isinstance(ans, dict) and "t_out_plus" in ans:
+                if ans and "t_out_plus" in ans:
                     self.hot_panel.t_out.setText(f"{ans['t_out_plus']:.6g}")
                     set_enabled(self.out_panel.q, False)
                 # persist schema selection (store current hydro schema id)
@@ -1336,17 +1836,27 @@ class MainWindow(QMainWindow):
                     schema=schema,
                 )
                 # Only apply q or t_out_plus if provided by calculation
-                if isinstance(ans, dict) and "q" in ans and (not self.out_panel.q.text().strip()):
+                ans = cast(Dict[str, Any], ans)
+                ans_dict = ans
+                if (
+                    ans_dict
+                    and "q" in ans_dict
+                    and (not self.out_panel.q.text().strip())
+                ):
                     try:
                         self.out_panel.q.blockSignals(True)
                         self.out_panel.q.setText(f"{ans['q']:.6g}")
                         self.out_panel.q.blockSignals(False)
                     except Exception:
                         pass
-                if isinstance(ans, dict) and "t_out_plus" in ans and (not self.hot_panel.t_out.text().strip()):
+                if (
+                    ans_dict
+                    and "t_out_plus" in ans_dict
+                    and (not self.hot_panel.t_out.text().strip())
+                ):
                     try:
                         self.hot_panel.t_out.blockSignals(True)
-                        self.hot_panel.t_out.setText(f"{ans['t_out_plus']:.6g}")
+                        self.hot_panel.t_out.setText(f"{ans_dict['t_out_plus']:.6g}")
                         self.hot_panel.t_out.blockSignals(False)
                     except Exception:
                         pass
@@ -1404,10 +1914,18 @@ class MainWindow(QMainWindow):
             # clear outputs
             try:
                 self.out_panel.clear_values()
+                try:
+                    set_enabled(self.out_panel.q, True)
+                except Exception:
+                    pass
             except Exception:
                 # fallback: direct resets
                 try:
                     self.out_panel.q.clear()
+                    try:
+                        set_enabled(self.out_panel.q, True)
+                    except Exception:
+                        pass
                 except Exception:
                     pass
                 try:
@@ -1445,22 +1963,33 @@ class MainWindow(QMainWindow):
                 txt = w.text().strip()
                 if not txt:
                     continue
-                txt = txt.replace(',', '.')
+                txt = txt.replace(",", ".")
                 # если формат вроде 09 или 00012.3 -> убираем ведущие нули
-                if txt.count('.') <= 1:
-                    if txt.startswith('0') and len(txt) > 1 and not txt.startswith('0.'):
+                if txt.count(".") <= 1:
+                    if (
+                        txt.startswith("0")
+                        and len(txt) > 1
+                        and not txt.startswith("0.")
+                    ):
                         # убрать все ведущие нули, оставить один перед точкой если была
-                        if '.' in txt:
-                            int_part, frac_part = txt.split('.', 1)
-                            int_part = int_part.lstrip('0') or '0'
-                            txt = int_part + ('.' + frac_part if frac_part != '' else '')
+                        if "." in txt:
+                            int_part, frac_part = txt.split(".", 1)
+                            int_part = int_part.lstrip("0") or "0"
+                            txt = int_part + (
+                                "." + frac_part if frac_part != "" else ""
+                            )
                         else:
-                            txt = txt.lstrip('0') or '0'
+                            txt = txt.lstrip("0") or "0"
                 w.blockSignals(True)
                 w.setText(txt)
                 w.blockSignals(False)
             except Exception:
                 pass
+        # any manual edit should lift the import-based suppression of full calculation
+        try:
+            self._suppress_full_calc_after_import = False
+        except Exception:
+            pass
         # after normalizing inputs, attempt only the minimal auto-calc helper
         try:
             self._try_auto_calc()
@@ -1470,7 +1999,6 @@ class MainWindow(QMainWindow):
             self._update_calc_button_state()
         except Exception:
             pass
-
 
     def _try_auto_calc(self) -> None:
         """Попытаться выполнить расчёт автоматически (вызывается после editingFinished важных полей)."""
@@ -1483,23 +2011,14 @@ class MainWindow(QMainWindow):
             q_text = self.out_panel.q.text().strip()
             t_out_hot_text = self.hot_panel.t_out.text().strip()
 
-            from typing import List, Dict
-
-            def mix_valid(mix: List[Dict[str, Any]]) -> bool:
-                try:
-                    if not mix:
-                        return False
-                    s = sum(float(item.get("share", 0.0)) for item in mix)
-                    return abs(s - 1.0) <= 1e-3
-                except Exception:
-                    return False
+            # use shared _mix_valid which accepts Sequence[MixRow]
 
             # 1) If Q is empty and we have sufficient data in either stream -> compute Q
             if not q_text:
                 cold_ready = (
                     cold["t_in"] and cold["t_out"] and cold["m"]
-                ) and mix_valid(cold_mix)
-                hot_ready = (hot["t_in"] and hot["t_out"] and hot["m"]) and mix_valid(
+                ) and self._mix_valid(cold_mix)
+                hot_ready = (hot["t_in"] and hot["t_out"] and hot["m"]) and self._mix_valid(
                     hot_mix
                 )
                 if cold_ready or hot_ready:
@@ -1508,7 +2027,7 @@ class MainWindow(QMainWindow):
 
             # 2) If t_out_hot is empty but Q is given and hot stream data + mix are valid -> compute t_out_hot
             if not t_out_hot_text and q_text:
-                hot_ready_for_tout = (hot["t_in"] and hot["m"]) and mix_valid(hot_mix)
+                hot_ready_for_tout = (hot["t_in"] and hot["m"]) and self._mix_valid(hot_mix)
                 if hot_ready_for_tout:
                     self._auto_calc_minimal()
                     return
