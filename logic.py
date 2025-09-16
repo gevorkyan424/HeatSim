@@ -39,7 +39,7 @@ from typing import Dict, Tuple, Any, List, Union
 import math
 
 
-def _to_float(x) -> float:
+def _to_float(x: Any) -> float:
     """Безопасно приводит значение к float."""
     try:
         return float(x)
@@ -90,7 +90,7 @@ def calculate(
     Все температурные величины ожидаются в K, массы в кг/с, теплоёмкости в кДж/кг·K, Q в кВт.
     """
 
-    def weighted_Cf(mix: list, t_ref: float) -> float:
+    def weighted_Cf(mix: List[Dict[str, Any]], t_ref: float) -> float:
         # mix: list of dicts with 'share', 'tb', 'cf', 'cp'
         s = 0.0
         for comp in mix or []:
@@ -98,7 +98,7 @@ def calculate(
             tb = _to_float(comp.get("tb", 0.0))
             cf = _to_float(comp.get("cf", 0.0))
             cp = _to_float(comp.get("cp", 0.0))
-            s += share * (cf if (t_ref is not None and t_ref < tb) else cp)
+            s += share * (cf if (t_ref < tb) else cp)
         return s
 
     out = {"sigma": 0.0, "k": 0.0, "k_source": "", "contact_type": ""}
@@ -490,7 +490,7 @@ def _k_cd(state: FlowState, hot_components: List[Component]):
 
 def _schema1(state: FlowState):
     # Mixing-mixing: derive missing variable only
-    delta = (state.T_out_hot - state.T_out_cold)
+    delta = state.T_out_hot - state.T_out_cold
     if delta != 0:
         if state.Q > 0 and state.K == 0:
             state.K = round(state.Q / delta, 5)
@@ -505,10 +505,16 @@ def _schema2(state: FlowState):
             if state.Q > 0 and state.K == 0:
                 denom = state.T_in_hot - state.T_in_cold - (state.B * state.Q)
                 if denom and (state.T_in_hot - state.T_in_cold) / denom > 0:
-                    state.K = round((1 / state.B) * math.log((state.T_in_hot - state.T_in_cold) / denom), 5)
+                    state.K = round(
+                        (1 / state.B)
+                        * math.log((state.T_in_hot - state.T_in_cold) / denom),
+                        5,
+                    )
             elif state.K > 0 and state.Q == 0:
                 term = 1 - math.exp(-state.K * state.B)
-                state.Q = round((1 / state.B) * (state.T_in_hot - state.T_in_cold) * term, 5)
+                state.Q = round(
+                    (1 / state.B) * (state.T_in_hot - state.T_in_cold) * term, 5
+                )
         except Exception:
             pass
 
@@ -520,10 +526,16 @@ def _schema3(state: FlowState):
             if state.Q > 0 and state.K == 0:
                 denom = state.T_in_hot - state.T_out_hot - (state.Q / state.W_hot)
                 if denom and (state.T_in_hot - state.T_out_cold) / denom > 0:
-                    state.K = round(state.W_hot * math.log((state.T_in_hot - state.T_out_cold) / denom), 5)
+                    state.K = round(
+                        state.W_hot
+                        * math.log((state.T_in_hot - state.T_out_cold) / denom),
+                        5,
+                    )
             elif state.K > 0 and state.Q == 0:
                 term = 1 - math.exp(-(state.K / state.W_hot))
-                state.Q = round(state.W_cold * (state.T_in_hot - state.T_out_cold) * term, 5)
+                state.Q = round(
+                    state.W_cold * (state.T_in_hot - state.T_out_cold) * term, 5
+                )
         except Exception:
             pass
 
@@ -535,10 +547,16 @@ def _schema4(state: FlowState):
             if state.Q > 0 and state.K == 0:
                 denom = state.T_out_hot - state.T_in_cold - (state.Q / state.W_cold)
                 if denom and (state.T_out_hot - state.T_in_cold) / denom > 0:
-                    state.K = round(state.W_cold * math.log((state.T_out_hot - state.T_in_cold) / denom), 5)
+                    state.K = round(
+                        state.W_cold
+                        * math.log((state.T_out_hot - state.T_in_cold) / denom),
+                        5,
+                    )
             elif state.K > 0 and state.Q == 0:
                 term = 1 - math.exp(-(state.K / state.W_cold))
-                state.Q = round(state.W_cold * (state.T_out_hot - state.T_in_cold) * term, 5)
+                state.Q = round(
+                    state.W_cold * (state.T_out_hot - state.T_in_cold) * term, 5
+                )
         except Exception:
             pass
 
@@ -550,17 +568,29 @@ def _schema5(state: FlowState):
             if state.Q > 0 and state.K == 0:
                 denom = state.T_out_hot - state.T_in_cold
                 if denom and (denom + (state.A * state.Q)) / denom > 0:
-                    state.K = round((1 / state.A) * math.log((denom + (state.A * state.Q)) / denom), 5)
+                    state.K = round(
+                        (1 / state.A) * math.log((denom + (state.A * state.Q)) / denom),
+                        5,
+                    )
                 if state.W_cold == state.W_hot and state.W_cold and state.K == 0:
                     state.W = state.W_cold
                     denom2 = state.T_in_hot - state.T_in_cold - (state.Q / state.W)
                     if denom2:
                         state.K = round(state.Q / denom2, 5)
             elif state.K > 0 and state.Q == 0:
-                state.Q = round((1 / state.A) * (state.T_out_hot - state.T_in_cold) * (math.exp(state.K * state.A) - 1), 5)
+                state.Q = round(
+                    (1 / state.A)
+                    * (state.T_out_hot - state.T_in_cold)
+                    * (math.exp(state.K * state.A) - 1),
+                    5,
+                )
                 if state.W_cold == state.W_hot and state.W_cold:
                     state.W = state.W_cold
-                    state.Q = round((state.W * (state.T_in_hot - state.T_in_cold) * state.K) / (state.W + state.K), 5)
+                    state.Q = round(
+                        (state.W * (state.T_in_hot - state.T_in_cold) * state.K)
+                        / (state.W + state.K),
+                        5,
+                    )
         except Exception:
             pass
 
@@ -583,7 +613,17 @@ def full(
     is_multicomponent = len(cold_components) > 1 or len(hot_components) > 1
 
     if not is_multicomponent:
-        # Single-component entropy (Sigma)
+        # Schema dispatch
+        schema_map = {
+            "Schema1": _schema1,
+            "Schema2": _schema2,
+            "Schema3": _schema3,
+            "Schema4": _schema4,
+            "Schema5": _schema5,
+        }
+        fn = schema_map.get(state.schema, _schema1)
+        fn(state)
+        # After schema-specific adjustments, recompute single-component Sigma
         if all(
             [
                 state.W_hot,
@@ -602,16 +642,6 @@ def full(
                 )
             except Exception:
                 pass
-        # Schema dispatch
-        schema_map = {
-            "Schema1": _schema1,
-            "Schema2": _schema2,
-            "Schema3": _schema3,
-            "Schema4": _schema4,
-            "Schema5": _schema5,
-        }
-        fn = schema_map.get(state.schema, _schema1)
-        fn(state)
     else:
         # Multi-component path
         state.contact_type = _get_contact_type(state, cold_components, hot_components)
