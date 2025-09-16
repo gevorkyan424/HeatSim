@@ -1,18 +1,29 @@
-\.venv/
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
+# Virtual environment
+.venv/
 env/
 venv/
-.vscode/.history/
-*.egg-info/
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# Distribution / packaging
 dist/
 build/
+*.egg-info/
 *.spec
+
+# Executables and archives
 *.zip
 *.exe
-*.lnk
+
+# Editor and OS files
+.vscode/
+.vscode/.history/
+.DS_Store
+Thumbs.db
+
+# Misc
 aspaProj-distribution.zip
 _test_unpack/
 releases/
