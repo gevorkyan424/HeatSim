@@ -4,16 +4,43 @@ import sys
 import csv
 from typing import Callable, TypedDict, Any, List, Dict, Optional
 
-from PyQt5.QtGui import QFont, QPixmap, QRegularExpressionValidator, QStandardItemModel, QStandardItem
-from PyQt5.QtCore import Qt, QRegularExpression, QObject, QEvent, QModelIndex, QSortFilterProxyModel
+from PyQt5.QtGui import (
+    QFont,
+    QPixmap,
+    QRegularExpressionValidator,
+    QStandardItemModel,
+    QStandardItem,
+)
+from PyQt5.QtCore import (
+    Qt,
+    QRegularExpression,
+    QObject,
+    QEvent,
+    QModelIndex,
+    QSortFilterProxyModel,
+)
 from PyQt5.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QGridLayout, QGroupBox, QLabel, QLineEdit, QPushButton,
-    QComboBox, QRadioButton, QButtonGroup, QMessageBox, QSizePolicy,
-    QHeaderView, QTableView, QFrame
+    QApplication,
+    QMainWindow,
+    QWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QGridLayout,
+    QGroupBox,
+    QLabel,
+    QLineEdit,
+    QPushButton,
+    QComboBox,
+    QRadioButton,
+    QButtonGroup,
+    QMessageBox,
+    QSizePolicy,
+    QHeaderView,
+    QTableView,
+    QFrame,
 )
 
-import logic  #модуль расчётов
+import logic  # модуль расчётов
 
 # ===================== БАЗА СВОЙСТВ КОМПОНЕНТОВ =====================
 COMPONENT_DB = {
@@ -55,6 +82,7 @@ COMPONENT_DB = {
     "Спирт": (351.52, 2.44, 1.43, 841.0),
 }
 
+
 # ===================== УТИЛИТЫ =====================
 def num_edit(read_only: bool = False, fixed_width: int = 150) -> QLineEdit:
     e = QLineEdit()
@@ -64,28 +92,36 @@ def num_edit(read_only: bool = False, fixed_width: int = 150) -> QLineEdit:
     e.setPlaceholderText("0.0")
     e.setFixedWidth(fixed_width)
     if not e.isEnabled():
-        e.setStyleSheet('background:#f3f3f3;')
-    rx = QRegularExpression(r'^$|^[0-9]{1,10}([.,][0-9]{0,5})?$')
+        e.setStyleSheet("background:#f3f3f3;")
+    rx = QRegularExpression(r"^$|^[0-9]{1,10}([.,][0-9]{0,5})?$")
     e.setValidator(QRegularExpressionValidator(rx))
 
     def fix_number():
         t = e.text().strip()
-        if not t: return
-        if t.endswith(',') or t.endswith('.'): t += '00'
-        sep = max(t.rfind(','), t.rfind('.'))
+        if not t:
+            return
+        if t.endswith(",") or t.endswith("."):
+            t += "00"
+        sep = max(t.rfind(","), t.rfind("."))
         if sep != -1:
-            i, f = t[:sep], t[sep+1:]
-            t = i[:10] + t[sep] + (f or '00')[:5]
+            i, f = t[:sep], t[sep + 1 :]
+            t = i[:10] + t[sep] + (f or "00")[:5]
         else:
             t = t[:10]
-        e.blockSignals(True); e.setText(t); e.blockSignals(False)
+        e.blockSignals(True)
+        e.setText(t)
+        e.blockSignals(False)
 
     e.editingFinished.connect(fix_number)
     return e
 
+
 def to_float(text: str) -> float:
-    try: return float(text.replace(',', '.'))
-    except Exception: return 0.0
+    try:
+        return float(text.replace(",", "."))
+    except Exception:
+        return 0.0
+
 
 def format_num(value: float, fmt: str = ".6g") -> str:
     try:
@@ -97,44 +133,47 @@ def format_num(value: float, fmt: str = ".6g") -> str:
     except Exception:
         return "0.0"
 
+
 def set_read_only(le: QLineEdit, ro: bool) -> None:
     # kept for backward-compat but delegate to new enabled semantics
     set_enabled(le, not ro)
+
 
 def set_enabled(le: QLineEdit, enabled: bool) -> None:
     le.setEnabled(enabled)
     if not enabled:
         # disabled fields: gray background
-        le.setStyleSheet('background:#f3f3f3;')
+        le.setStyleSheet("background:#f3f3f3;")
     else:
         # enabled fields: clear style (caller may set manual highlight)
-        le.setStyleSheet('')
+        le.setStyleSheet("")
     # keep associated lock button in sync without triggering its signals
-    btn = getattr(le, '_lock_btn', None)
+    btn = getattr(le, "_lock_btn", None)
     if btn is not None:
         # update text only; button click will set enabled state explicitly
-        btn.setText('🔒' if not enabled else '🔓')
+        btn.setText("🔒" if not enabled else "🔓")
+
 
 def lock_button_for(line_edit: QLineEdit) -> QPushButton:
     btn = QPushButton()
     btn.setFixedSize(22, 22)
-    btn.setToolTip('Заблокировать/разблокировать поле')
+    btn.setToolTip("Заблокировать/разблокировать поле")
 
     def on_click():
         # if the field is enabled -> lock it; otherwise unlock
         if line_edit.isEnabled():
             # lock
             set_enabled(line_edit, False)
-            setattr(line_edit, '_just_unlocked', False)
+            setattr(line_edit, "_just_unlocked", False)
             # remove any temporary handler if present
-            h = getattr(line_edit, '_just_unlocked_handler', None)
+            h = getattr(line_edit, "_just_unlocked_handler", None)
             if h is not None:
                 try:
                     line_edit.textEdited.disconnect(h)
                 except Exception:
                     pass
                 try:
-                    delattr(line_edit, '_just_unlocked_handler')
+                    delattr(line_edit, "_just_unlocked_handler")
                 except Exception:
                     pass
         else:
@@ -143,59 +182,59 @@ def lock_button_for(line_edit: QLineEdit) -> QPushButton:
             set_enabled(line_edit, True)
             try:
                 # waiting flag indicates we recently unlocked and expect possible typing
-                setattr(line_edit, '_just_unlocked_waiting', True)
+                setattr(line_edit, "_just_unlocked_waiting", True)
                 # clear typed flag
-                if hasattr(line_edit, '_just_unlocked_typed'):
-                    delattr(line_edit, '_just_unlocked_typed')
+                if hasattr(line_edit, "_just_unlocked_typed"):
+                    delattr(line_edit, "_just_unlocked_typed")
             except Exception:
                 pass
 
             def _on_text_edited(_text: str) -> None:
                 # mark that the user actually typed
                 try:
-                    setattr(line_edit, '_just_unlocked_typed', True)
+                    setattr(line_edit, "_just_unlocked_typed", True)
                 finally:
                     try:
                         line_edit.textEdited.disconnect(_on_text_edited)
                     except Exception:
                         pass
                     try:
-                        if hasattr(line_edit, '_just_unlocked_handler'):
-                            delattr(line_edit, '_just_unlocked_handler')
+                        if hasattr(line_edit, "_just_unlocked_handler"):
+                            delattr(line_edit, "_just_unlocked_handler")
                     except Exception:
                         pass
 
             # store handler reference for cleanup and connect
             try:
-                setattr(line_edit, '_just_unlocked_handler', _on_text_edited)
+                setattr(line_edit, "_just_unlocked_handler", _on_text_edited)
                 line_edit.textEdited.connect(_on_text_edited)
             except Exception:
                 try:
-                    if hasattr(line_edit, '_just_unlocked_handler'):
-                        delattr(line_edit, '_just_unlocked_handler')
+                    if hasattr(line_edit, "_just_unlocked_handler"):
+                        delattr(line_edit, "_just_unlocked_handler")
                 except Exception:
                     pass
 
     btn.clicked.connect(on_click)
     # initial text reflects current state
-    btn.setText('🔒' if not line_edit.isEnabled() else '🔓')
+    btn.setText("🔒" if not line_edit.isEnabled() else "🔓")
     # attach for external sync
-    setattr(line_edit, '_lock_btn', btn)
+    setattr(line_edit, "_lock_btn", btn)
     return btn
 
 
 def auto_disable_handler(line_edit: QLineEdit) -> Callable[[], None]:
     def _handler() -> None:
         # if we just unlocked for editing, only skip auto-disable when no typing occurred
-        if getattr(line_edit, '_just_unlocked_waiting', False):
+        if getattr(line_edit, "_just_unlocked_waiting", False):
             # if user typed, proceed to disable and clear flags
-            if getattr(line_edit, '_just_unlocked_typed', False):
+            if getattr(line_edit, "_just_unlocked_typed", False):
                 try:
-                    delattr(line_edit, '_just_unlocked_typed')
+                    delattr(line_edit, "_just_unlocked_typed")
                 except Exception:
                     pass
                 try:
-                    delattr(line_edit, '_just_unlocked_waiting')
+                    delattr(line_edit, "_just_unlocked_waiting")
                 except Exception:
                     pass
                 # allow auto-disable to proceed
@@ -203,7 +242,9 @@ def auto_disable_handler(line_edit: QLineEdit) -> Callable[[], None]:
                 # user didn't type yet — skip disabling for now
                 return
         set_enabled(line_edit, False)
+
     return _handler
+
 
 # ===================== TYPE DEFINITIONS =====================
 class FlowData(TypedDict):
@@ -211,6 +252,7 @@ class FlowData(TypedDict):
     t_out: float
     m: float
     p: float
+
 
 class MixRow(TypedDict):
     name: str
@@ -220,11 +262,13 @@ class MixRow(TypedDict):
     cp: float
     rf: float
 
+
 class CalcResult(TypedDict, total=False):
     q: float
     t_out_plus: float
     sigma: float
     k: float
+
 
 # ===================== ПАНЕЛЬ ПОТОКОВ =====================
 class FlowPanel:
@@ -243,31 +287,53 @@ class FlowPanel:
         self.p_lock = lock_button_for(self.p)
 
         row = 0
-        grid.addWidget(QLabel(f'Температура на входе ({title.lower()}), T<sub>{sign}</sub><sup>in</sup> [ K ]'), row, 0)
+        grid.addWidget(
+            QLabel(
+                f"Температура на входе ({title.lower()}), T<sub>{sign}</sub><sup>in</sup> [ K ]"
+            ),
+            row,
+            0,
+        )
         h0 = QHBoxLayout()
-        h0.setContentsMargins(0,0,0,0)
-        h0.addWidget(self.t_in); h0.addWidget(self.t_in_lock)
+        h0.setContentsMargins(0, 0, 0, 0)
+        h0.addWidget(self.t_in)
+        h0.addWidget(self.t_in_lock)
         grid.addLayout(h0, row, 1)
 
         row += 1
-        grid.addWidget(QLabel(f'Температура на выходе ({title.lower()}), T<sub>{sign}</sub><sup>out</sup> [ K ]'), row, 0)
+        grid.addWidget(
+            QLabel(
+                f"Температура на выходе ({title.lower()}), T<sub>{sign}</sub><sup>out</sup> [ K ]"
+            ),
+            row,
+            0,
+        )
         h1 = QHBoxLayout()
-        h1.setContentsMargins(0,0,0,0)
-        h1.addWidget(self.t_out); h1.addWidget(self.t_out_lock)
+        h1.setContentsMargins(0, 0, 0, 0)
+        h1.addWidget(self.t_out)
+        h1.addWidget(self.t_out_lock)
         grid.addLayout(h1, row, 1)
 
         row += 1
-        grid.addWidget(QLabel(f'Расход потока ({title.lower()}), g<sub>{sign}</sub> [ кг/сек ]'), row, 0)
+        grid.addWidget(
+            QLabel(f"Расход потока ({title.lower()}), g<sub>{sign}</sub> [ кг/сек ]"),
+            row,
+            0,
+        )
         h2 = QHBoxLayout()
-        h2.setContentsMargins(0,0,0,0)
-        h2.addWidget(self.m); h2.addWidget(self.m_lock)
+        h2.setContentsMargins(0, 0, 0, 0)
+        h2.addWidget(self.m)
+        h2.addWidget(self.m_lock)
         grid.addLayout(h2, row, 1)
 
         row += 1
-        grid.addWidget(QLabel(f'Давление ({title.lower()}), P<sub>{sign}</sub> [ кг/м² ]'), row, 0)
+        grid.addWidget(
+            QLabel(f"Давление ({title.lower()}), P<sub>{sign}</sub> [ кг/м² ]"), row, 0
+        )
         h3 = QHBoxLayout()
-        h3.setContentsMargins(0,0,0,0)
-        h3.addWidget(self.p); h3.addWidget(self.p_lock)
+        h3.setContentsMargins(0, 0, 0, 0)
+        h3.addWidget(self.p)
+        h3.addWidget(self.p_lock)
         grid.addLayout(h3, row, 1)
 
         self.box.setFixedSize(700, 180)
@@ -287,12 +353,15 @@ class FlowPanel:
         return self.box
 
     def to_dict(self) -> FlowData:
-        return FlowData({
-            "t_in": to_float(self.t_in.text()),
-            "t_out": to_float(self.t_out.text()),
-            "m": to_float(self.m.text()),
-            "p": to_float(self.p.text()),
-        })
+        return FlowData(
+            {
+                "t_in": to_float(self.t_in.text()),
+                "t_out": to_float(self.t_out.text()),
+                "m": to_float(self.m.text()),
+                "p": to_float(self.p.text()),
+            }
+        )
+
 
 # ===================== DELETE FILTER =====================
 class KeyDeleteFilter(QObject):
@@ -301,15 +370,26 @@ class KeyDeleteFilter(QObject):
         self.callback: Callable[[], None] = callback
 
     def eventFilter(self, obj: QObject, event: QEvent) -> bool:  # type: ignore[override]
-        if event.type() == QEvent.KeyPress and getattr(event, 'key', lambda: None)() == Qt.Key_Delete:
+        if (
+            event.type() == QEvent.KeyPress
+            and getattr(event, "key", lambda: None)() == Qt.Key_Delete
+        ):
             self.callback()
             return True
         return super().eventFilter(obj, event)
 
+
 # ===================== МОДЕЛЬ СМЕСИ =====================
 class MixModel(QStandardItemModel):
     COL_NAME, COL_SHARE, COL_TB, COL_CF, COL_CP, COL_RF = range(6)
-    HEADERS = ["Компонент", "Доля", "Tb, K", "C_f, кДж/кг·K", "C_p, кДж/кг·K", "r_f, кДж/кг"]
+    HEADERS = [
+        "Компонент",
+        "Доля",
+        "Tb, K",
+        "C_f, кДж/кг·K",
+        "C_p, кДж/кг·K",
+        "r_f, кДж/кг",
+    ]
     SORT_ROLE = Qt.UserRole + 1
 
     def __init__(self, parent=None):
@@ -329,11 +409,13 @@ class MixModel(QStandardItemModel):
         self.setData(idx, f"{value:.6g}", Qt.DisplayRole)
         self.setData(idx, value, self.SORT_ROLE)
 
-    def add_or_update(self, name: str, share: float, tb: float, cf: float, cp: float, rf: float) -> int:
+    def add_or_update(
+        self, name: str, share: float, tb: float, cf: float, cp: float, rf: float
+    ) -> int:
         row = self._row_by_name(name)
         if row >= 0:
             idx_share = self.index(row, self.COL_SHARE)
-            cur_share = float(self.data(idx_share, Qt.DisplayRole).replace(',', '.'))
+            cur_share = float(self.data(idx_share, Qt.DisplayRole).replace(",", "."))
             new_share = cur_share + share
             self.setData(idx_share, f"{new_share:.6g}", Qt.DisplayRole)
             self.setData(idx_share, new_share, self.SORT_ROLE)
@@ -349,10 +431,10 @@ class MixModel(QStandardItemModel):
         name_item.setTextAlignment(Qt.AlignCenter | Qt.AlignVCenter)
         self.setItem(r, self.COL_NAME, name_item)
         self.setItem(r, self.COL_SHARE, self._num_item(share))
-        self.setItem(r, self.COL_TB,    self._num_item(tb))
-        self.setItem(r, self.COL_CF,    self._num_item(cf))
-        self.setItem(r, self.COL_CP,    self._num_item(cp))
-        self.setItem(r, self.COL_RF,    self._num_item(rf))
+        self.setItem(r, self.COL_TB, self._num_item(tb))
+        self.setItem(r, self.COL_CF, self._num_item(cf))
+        self.setItem(r, self.COL_CP, self._num_item(cp))
+        self.setItem(r, self.COL_RF, self._num_item(rf))
         return r
 
     def _row_by_name(self, name: str) -> int:
@@ -368,18 +450,25 @@ class MixModel(QStandardItemModel):
     def rows_as_dicts(self) -> List[MixRow]:
         out: List[MixRow] = []
         for r in range(self.rowCount()):
+
             def v(c):
                 txt = self.data(self.index(r, c), Qt.DisplayRole) or "0"
-                return float(txt.replace(',', '.')) if c != self.COL_NAME else txt
-            out.append(MixRow({
-                "name": v(self.COL_NAME),  # type: ignore[arg-type]
-                "share": v(self.COL_SHARE),  # type: ignore[arg-type]
-                "tb": v(self.COL_TB),  # type: ignore[arg-type]
-                "cf": v(self.COL_CF),  # type: ignore[arg-type]
-                "cp": v(self.COL_CP),  # type: ignore[arg-type]
-                "rf": v(self.COL_RF),  # type: ignore[arg-type]
-            }))
+                return float(txt.replace(",", ".")) if c != self.COL_NAME else txt
+
+            out.append(
+                MixRow(
+                    {
+                        "name": v(self.COL_NAME),  # type: ignore[arg-type]
+                        "share": v(self.COL_SHARE),  # type: ignore[arg-type]
+                        "tb": v(self.COL_TB),  # type: ignore[arg-type]
+                        "cf": v(self.COL_CF),  # type: ignore[arg-type]
+                        "cp": v(self.COL_CP),  # type: ignore[arg-type]
+                        "rf": v(self.COL_RF),  # type: ignore[arg-type]
+                    }
+                )
+            )
         return out
+
 
 # ===================== ПАНЕЛЬ СМЕСИ =====================
 class MixPanel:
@@ -392,7 +481,7 @@ class MixPanel:
 
         # верхняя линия управления
         top = QHBoxLayout()
-        top.setContentsMargins(0,0,0,0)
+        top.setContentsMargins(0, 0, 0, 0)
         top.setSpacing(6)
         self.comp = QComboBox()
         self.comp.addItems(sorted(COMPONENT_DB.keys()))
@@ -403,37 +492,64 @@ class MixPanel:
         self.sum_field = num_edit(read_only=True, fixed_width=100)
         self.sum_field.setText("0.0")
         self.add_btn = QPushButton("Добавить")
-        top.addWidget(self.comp); top.addStretch(1)
-        top.addWidget(QLabel("Доля")); top.addWidget(self.share); top.addSpacing(8)
-        top.addWidget(QLabel("Сумма")); top.addWidget(self.sum_field); top.addSpacing(8)
+        top.addWidget(self.comp)
+        top.addStretch(1)
+        top.addWidget(QLabel("Доля"))
+        top.addWidget(self.share)
+        top.addSpacing(8)
+        top.addWidget(QLabel("Сумма"))
+        top.addWidget(self.sum_field)
+        top.addSpacing(8)
         top.addWidget(self.add_btn)
         v.addLayout(top)
 
         # источник параметров
-        src = QHBoxLayout(); src.setContentsMargins(0,0,0,0); src.setSpacing(8)
+        src = QHBoxLayout()
+        src.setContentsMargins(0, 0, 0, 0)
+        src.setSpacing(8)
         self.rb_group = QButtonGroup(self.box)
-        self.rb_db = QRadioButton("Взять параметры из справочника NIST Chemistry WebBook")
+        self.rb_db = QRadioButton(
+            "Взять параметры из справочника NIST Chemistry WebBook"
+        )
         self.rb_manual = QRadioButton("Ввести параметры вручную")
-        self.rb_group.addButton(self.rb_db, 0); self.rb_group.addButton(self.rb_manual, 1)
+        self.rb_group.addButton(self.rb_db, 0)
+        self.rb_group.addButton(self.rb_manual, 1)
         self.rb_db.setChecked(True)
-        src.addWidget(self.rb_db); src.addWidget(self.rb_manual); src.addStretch(1)
+        src.addWidget(self.rb_db)
+        src.addWidget(self.rb_manual)
+        src.addStretch(1)
         v.addLayout(src)
 
         # параметры
-        grid = QGridLayout(); grid.setHorizontalSpacing(12); grid.setVerticalSpacing(6)
-        self.tb = num_edit(read_only=True); self.cf = num_edit(read_only=True)
-        self.cp = num_edit(read_only=True); self.rf = num_edit(read_only=True)
-        grid.addWidget(QLabel("Температура кипения, Tb  [ K ]"), 0, 0); grid.addWidget(self.tb, 0, 1)
-        grid.addWidget(QLabel("Удельная теплоёмкость жидкости, C_f  [ кДж/кг·K ]"), 1, 0); grid.addWidget(self.cf, 1, 1)
-        grid.addWidget(QLabel("Удельная теплоёмкость пара, C_p  [ кДж/кг·K ]"), 2, 0); grid.addWidget(self.cp, 2, 1)
-        grid.addWidget(QLabel("Скрытая теплота фазового перехода, r_f  [ кДж/кг ]"), 3, 0); grid.addWidget(self.rf, 3, 1)
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(6)
+        self.tb = num_edit(read_only=True)
+        self.cf = num_edit(read_only=True)
+        self.cp = num_edit(read_only=True)
+        self.rf = num_edit(read_only=True)
+        grid.addWidget(QLabel("Температура кипения, Tb  [ K ]"), 0, 0)
+        grid.addWidget(self.tb, 0, 1)
+        grid.addWidget(
+            QLabel("Удельная теплоёмкость жидкости, C_f  [ кДж/кг·K ]"), 1, 0
+        )
+        grid.addWidget(self.cf, 1, 1)
+        grid.addWidget(QLabel("Удельная теплоёмкость пара, C_p  [ кДж/кг·K ]"), 2, 0)
+        grid.addWidget(self.cp, 2, 1)
+        grid.addWidget(
+            QLabel("Скрытая теплота фазового перехода, r_f  [ кДж/кг ]"), 3, 0
+        )
+        grid.addWidget(self.rf, 3, 1)
         v.addLayout(grid)
 
         # таблица
         self.model = MixModel()
-        self.proxy = QSortFilterProxyModel(); self.proxy.setSourceModel(self.model)
-        self.proxy.setSortRole(MixModel.SORT_ROLE); self.proxy.setDynamicSortFilter(True)
-        self.view = QTableView(); self.view.setModel(self.proxy)
+        self.proxy = QSortFilterProxyModel()
+        self.proxy.setSourceModel(self.model)
+        self.proxy.setSortRole(MixModel.SORT_ROLE)
+        self.proxy.setDynamicSortFilter(True)
+        self.view = QTableView()
+        self.view.setModel(self.proxy)
         self.view.setSortingEnabled(False)
         self.view.horizontalHeader().setVisible(True)
         self.view.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
@@ -452,7 +568,7 @@ class MixPanel:
             hh.setFont(hh_font)
         except Exception:
             pass
-        table_font  = QFont("Consolas", 9)
+        table_font = QFont("Consolas", 9)
         self.view.setFont(table_font)
         self.view.horizontalHeader().setDefaultAlignment(Qt.AlignCenter)
         try:
@@ -478,12 +594,14 @@ class MixPanel:
 
         # ensure these fields don't carry stale _lock_btn attributes
         for w in (self.share, self.tb, self.cf, self.cp, self.rf, self.sum_field):
-            if hasattr(w, '_lock_btn'):
-                delattr(w, '_lock_btn')
+            if hasattr(w, "_lock_btn"):
+                delattr(w, "_lock_btn")
 
-        self.update_share_hint(); self._resort()
+        self.update_share_hint()
+        self._resort()
 
-    def widget(self) -> QGroupBox: return self.box
+    def widget(self) -> QGroupBox:
+        return self.box
 
     # сортировка по Tb автоматически
     def _resort(self) -> None:
@@ -492,28 +610,46 @@ class MixPanel:
         self.proxy.sort(col, order)
 
     def _on_model_changed(self, *args: Any) -> None:
-        self.update_share_hint(); self._resort(); self._auto_export_csv()
+        self.update_share_hint()
+        self._resort()
+        self._auto_export_csv()
 
     def _auto_export_csv(self) -> None:
         try:
             with open(self.export_path, "w", newline="", encoding="utf-8-sig") as f:
-                wr = csv.writer(f, delimiter=';')
-                wr.writerow(["Компонент","Доля","Tb, K","C_f, кДж/кг·K","C_p, кДж/кг·K","r_f, кДж/кг"])
+                wr = csv.writer(f, delimiter=";")
+                wr.writerow(
+                    [
+                        "Компонент",
+                        "Доля",
+                        "Tb, K",
+                        "C_f, кДж/кг·K",
+                        "C_p, кДж/кг·K",
+                        "r_f, кДж/кг",
+                    ]
+                )
                 for r in range(self.model.rowCount()):
-                    row=[]
+                    row = []
                     for c in range(self.model.columnCount()):
-                        txt = self.model.data(self.model.index(r,c), Qt.DisplayRole) or ""
-                        if c!=0: txt = txt.replace('.', ',')
+                        txt = (
+                            self.model.data(self.model.index(r, c), Qt.DisplayRole)
+                            or ""
+                        )
+                        if c != 0:
+                            txt = txt.replace(".", ",")
                         row.append(txt)
                     wr.writerow(row)
         except Exception:
             pass
 
     def current_sum(self) -> float:
-        s=0.0
+        s = 0.0
         for r in range(self.model.rowCount()):
-            txt = self.model.data(self.model.index(r, MixModel.COL_SHARE), Qt.DisplayRole) or "0"
-            s += float(txt.replace(',', '.'))
+            txt = (
+                self.model.data(self.model.index(r, MixModel.COL_SHARE), Qt.DisplayRole)
+                or "0"
+            )
+            s += float(txt.replace(",", "."))
         return s
 
     def update_share_hint(self) -> None:
@@ -530,15 +666,15 @@ class MixPanel:
 
         try:
             if manual:
-                highlight_style = 'QLineEdit { background: #fff7d6; }'
+                highlight_style = "QLineEdit { background: #fff7d6; }"
                 for w in (self.tb, self.cf, self.cp, self.rf):
                     w.setStyleSheet(highlight_style)
             else:
                 for w in (self.tb, self.cf, self.cp, self.rf):
                     if not w.isEnabled():
-                        w.setStyleSheet('background:#f3f3f3;')
+                        w.setStyleSheet("background:#f3f3f3;")
                     else:
-                        w.setStyleSheet('')
+                        w.setStyleSheet("")
         except Exception:
             pass
 
@@ -546,80 +682,126 @@ class MixPanel:
         props = COMPONENT_DB.get(name)
         if props:
             tb, cf, cp, rf = props
-            self.tb.setText(f"{tb}"); self.cf.setText(f"{cf}")
-            self.cp.setText(f"{cp}"); self.rf.setText(f"{rf}")
+            self.tb.setText(f"{tb}")
+            self.cf.setText(f"{cf}")
+            self.cp.setText(f"{cp}")
+            self.rf.setText(f"{rf}")
         else:
-            for w in (self.tb, self.cf, self.cp, self.rf): w.setText("0.0")
+            for w in (self.tb, self.cf, self.cp, self.rf):
+                w.setText("0.0")
 
     def validate_share_max1(self) -> None:
         val = to_float(self.share.text())
-        if val>1.0:
-            QMessageBox.warning(self.box,"Доля","Доля компонента не может превышать 1. Повторите ввод.")
-            self.share.clear(); self.share.setFocus()
+        if val > 1.0:
+            QMessageBox.warning(
+                self.box,
+                "Доля",
+                "Доля компонента не может превышать 1. Повторите ввод.",
+            )
+            self.share.clear()
+            self.share.setFocus()
 
     def on_add(self) -> None:
         remaining = max(0.0, 1.0 - self.current_sum())
         share_val = to_float(self.share.text())
         if share_val > 1.0 + 1e-12:
-            QMessageBox.warning(self.box,"Доля","Доля компонента не может превышать 1. Повторите ввод.")
-            self.share.clear(); self.share.setFocus(); return
+            QMessageBox.warning(
+                self.box,
+                "Доля",
+                "Доля компонента не может превышать 1. Повторите ввод.",
+            )
+            self.share.clear()
+            self.share.setFocus()
+            return
         if share_val <= 0.0:
-            QMessageBox.warning(self.box,"Доля","Введите положительную долю > 0."); return
+            QMessageBox.warning(self.box, "Доля", "Введите положительную долю > 0.")
+            return
         if share_val > remaining + 1e-12:
             if remaining <= 0.0:
-                QMessageBox.warning(self.box,"Сумма долей","Сумма долей уже равна 1.0."); return
-            share_val = remaining; self.share.setText(f"{share_val:.5f}")
+                QMessageBox.warning(
+                    self.box, "Сумма долей", "Сумма долей уже равна 1.0."
+                )
+                return
+            share_val = remaining
+            self.share.setText(f"{share_val:.5f}")
 
         name = self.comp.currentText()
         if self.rb_db.isChecked():
-            tb,cf,cp,rf = COMPONENT_DB[name]
+            tb, cf, cp, rf = COMPONENT_DB[name]
         else:
-            tb,cf,cp,rf = (to_float(self.tb.text()), to_float(self.cf.text()),
-                           to_float(self.cp.text()), to_float(self.rf.text()))
+            tb, cf, cp, rf = (
+                to_float(self.tb.text()),
+                to_float(self.cf.text()),
+                to_float(self.cp.text()),
+                to_float(self.rf.text()),
+            )
         self.model.add_or_update(name, share_val, tb, cf, cp, rf)
         self.share.clear()
 
-    def ask_delete(self, count:int) -> bool:
-        return QMessageBox.question(self.box,"Удаление",f"Удалить {count} строку(и)?",
-                                    QMessageBox.Yes|QMessageBox.No,QMessageBox.No)==QMessageBox.Yes
+    def ask_delete(self, count: int) -> bool:
+        return (
+            QMessageBox.question(
+                self.box,
+                "Удаление",
+                f"Удалить {count} строку(и)?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            == QMessageBox.Yes
+        )
 
     def selected_source_rows(self) -> List[int]:
         rows: List[int] = []
         for proxy_index in self.view.selectionModel().selectedRows():
-            src_idx = self.proxy.mapToSource(proxy_index); rows.append(src_idx.row())
+            src_idx = self.proxy.mapToSource(proxy_index)
+            rows.append(src_idx.row())
         return sorted(set(rows), reverse=True)
 
     def delete_selected_rows(self) -> None:
         rows = self.selected_source_rows()
         if not rows:
-            QMessageBox.information(self.box,"Удаление","Выберите строку(и) для удаления."); return
-        if not self.ask_delete(len(rows)): return
+            QMessageBox.information(
+                self.box, "Удаление", "Выберите строку(и) для удаления."
+            )
+            return
+        if not self.ask_delete(len(rows)):
+            return
         self.model.remove_rows(rows)
 
     def on_double_click(self, index: QModelIndex) -> None:
-        if not index.isValid(): return
-        if not self.ask_delete(1): return
+        if not index.isValid():
+            return
+        if not self.ask_delete(1):
+            return
         self.model.removeRow(self.proxy.mapToSource(index).row())
 
-    def mix_rows(self) -> List[MixRow]: return self.model.rows_as_dicts()
+    def mix_rows(self) -> List[MixRow]:
+        return self.model.rows_as_dicts()
+
 
 # ===================== ПАНЕЛЬ ГИДРОДИНАМИКИ =====================
 class HydroPanel(QGroupBox):
-    def __init__(self, title: str = "Гидродинамика потоков", parent: Optional[QWidget] = None):
+    def __init__(
+        self, title: str = "Гидродинамика потоков", parent: Optional[QWidget] = None
+    ):
         super().__init__(title, parent)
-        base = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'assets', 'images')
+        base = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "assets", "images"
+        )
         self._images = {
-            "mix_mix": os.path.join(base,"one.png"),
-            "parallel": os.path.join(base,"two.png"),
-            "mix_cold_disp_hot": os.path.join(base,"three.png"),
-            "mix_hot_disp_cold": os.path.join(base,"four.png"),
-            "counter": os.path.join(base,"five.png"),
+            "mix_mix": os.path.join(base, "one.png"),
+            "parallel": os.path.join(base, "two.png"),
+            "mix_cold_disp_hot": os.path.join(base, "three.png"),
+            "mix_hot_disp_cold": os.path.join(base, "four.png"),
+            "counter": os.path.join(base, "five.png"),
         }
         root = QHBoxLayout(self)
-        root.setContentsMargins(6,6,6,6)
+        root.setContentsMargins(6, 6, 6, 6)
         root.setSpacing(6)
-        left = QVBoxLayout(); right = QVBoxLayout()
-        left.setContentsMargins(4,4,4,4); right.setContentsMargins(4,4,4,4)
+        left = QVBoxLayout()
+        right = QVBoxLayout()
+        left.setContentsMargins(4, 4, 4, 4)
+        right.setContentsMargins(4, 4, 4, 4)
         root.addLayout(left)
         root.addLayout(right)
         root.setStretch(0, 0)
@@ -628,40 +810,77 @@ class HydroPanel(QGroupBox):
         self.rb_mix_mix = QRadioButton("Смешение - смешение")
         self.rb_parallel = QRadioButton("Вытеснение - вытеснение (прямоток)")
         self.rb_mix_cold = QRadioButton("Смешение (хол.) - вытеснение (гор.)")
-        self.rb_mix_hot  = QRadioButton("Смешение (гор.) - вытеснение (хол.)")
-        self.rb_counter  = QRadioButton("Вытеснение - вытеснение (противоток)")
-        for rb in (self.rb_mix_mix,self.rb_parallel,self.rb_mix_cold,self.rb_mix_hot,self.rb_counter):
+        self.rb_mix_hot = QRadioButton("Смешение (гор.) - вытеснение (хол.)")
+        self.rb_counter = QRadioButton("Вытеснение - вытеснение (противоток)")
+        for rb in (
+            self.rb_mix_mix,
+            self.rb_parallel,
+            self.rb_mix_cold,
+            self.rb_mix_hot,
+            self.rb_counter,
+        ):
             left.addWidget(rb)
         left.addStretch(1)
 
         self.image_label = QLabel()
         self.image_label.setAlignment(Qt.AlignCenter)
-        self.image_label.setFixedSize(350,175)
+        self.image_label.setFixedSize(350, 175)
         self.image_label.setFrameShape(QFrame.Box)
         self.image_label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         right.addWidget(self.image_label, 0, Qt.AlignVCenter | Qt.AlignHCenter)
 
         self.rb_mix_mix.toggled.connect(lambda on: on and self._set_mode("mix_mix"))
         self.rb_parallel.toggled.connect(lambda on: on and self._set_mode("parallel"))
-        self.rb_mix_cold.toggled.connect(lambda on: on and self._set_mode("mix_cold_disp_hot"))
-        self.rb_mix_hot.toggled.connect(lambda on: on and self._set_mode("mix_hot_disp_cold"))
+        self.rb_mix_cold.toggled.connect(
+            lambda on: on and self._set_mode("mix_cold_disp_hot")
+        )
+        self.rb_mix_hot.toggled.connect(
+            lambda on: on and self._set_mode("mix_hot_disp_cold")
+        )
         self.rb_counter.toggled.connect(lambda on: on and self._set_mode("counter"))
 
-        self.rb_mix_mix.setChecked(True); self._set_mode("mix_mix")
+        self.rb_mix_mix.setChecked(True)
+        self._set_mode("mix_mix")
+
+    def current_schema(self) -> str:
+        """Возвращает идентификатор схемы (Schema1..Schema5) согласно выбранной радиокнопке."""
+        if self.rb_mix_mix.isChecked():
+            return "Schema1"
+        if self.rb_parallel.isChecked():
+            return "Schema2"
+        if self.rb_mix_cold.isChecked():
+            return "Schema3"
+        if self.rb_mix_hot.isChecked():
+            return "Schema4"
+        if self.rb_counter.isChecked():
+            return "Schema5"
+        return "Schema1"
 
     def _set_mode(self, key: str) -> None:
-        pix = QPixmap(self._images.get(key,""))
+        pix = QPixmap(self._images.get(key, ""))
         if pix.isNull():
-            self.image_label.setText("Нет изображения"); self.image_label.setPixmap(QPixmap()); return
-        self.image_label.setPixmap(pix.scaled(self.image_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            self.image_label.setText("Нет изображения")
+            self.image_label.setPixmap(QPixmap())
+            return
+        self.image_label.setPixmap(
+            pix.scaled(
+                self.image_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation
+            )
+        )
 
     def resizeEvent(self, e: QEvent) -> None:  # type: ignore[override]
         super().resizeEvent(e)  # type: ignore[arg-type]
-        if   self.rb_mix_mix.isChecked():    self._set_mode("mix_mix")
-        elif self.rb_parallel.isChecked():   self._set_mode("parallel")
-        elif self.rb_mix_cold.isChecked():   self._set_mode("mix_cold_disp_hot")
-        elif self.rb_mix_hot.isChecked():    self._set_mode("mix_hot_disp_cold")
-        elif self.rb_counter.isChecked():    self._set_mode("counter")
+        if self.rb_mix_mix.isChecked():
+            self._set_mode("mix_mix")
+        elif self.rb_parallel.isChecked():
+            self._set_mode("parallel")
+        elif self.rb_mix_cold.isChecked():
+            self._set_mode("mix_cold_disp_hot")
+        elif self.rb_mix_hot.isChecked():
+            self._set_mode("mix_hot_disp_cold")
+        elif self.rb_counter.isChecked():
+            self._set_mode("counter")
+
 
 # ===================== ПАНЕЛЬ ВЫХОДНЫХ ПАРАМЕТРОВ =====================
 class OutputPanel(QGroupBox):
@@ -673,19 +892,25 @@ class OutputPanel(QGroupBox):
         self.sigma = num_edit(read_only=True, fixed_width=120)
         self.k = num_edit(read_only=True, fixed_width=120)
         # стартовые значения
-        self.sigma.setText("0.0"); set_enabled(self.sigma, False)
-        self.k.setText("0.0"); set_enabled(self.k, False)
+        self.sigma.setText("0.0")
+        set_enabled(self.sigma, False)
+        self.k.setText("0.0")
+        set_enabled(self.k, False)
         g.addWidget(QLabel("Тепловая нагрузка, Q [кВт]"), 0, 0)
-        hq = QHBoxLayout(); hq.setContentsMargins(0,0,0,0); hq.addWidget(self.q); hq.addWidget(self.q_lock)
+        hq = QHBoxLayout()
+        hq.setContentsMargins(0, 0, 0, 0)
+        hq.addWidget(self.q)
+        hq.addWidget(self.q_lock)
         g.addLayout(hq, 0, 1)
         g.addWidget(QLabel("Производство энтропии, σ [кВт/К]"), 1, 0)
         g.addWidget(self.sigma, 1, 1)
         g.addWidget(QLabel("Коэффициент теплопередачи, K [кВт/К]"), 2, 0)
         g.addWidget(self.k, 2, 1)
+        # Removed schema_label (schema info now only in status bar)
         # remove stale lock attributes if any
         for w in (self.sigma, self.k):
-            if hasattr(w, '_lock_btn'):
-                delattr(w, '_lock_btn')
+            if hasattr(w, "_lock_btn"):
+                delattr(w, "_lock_btn")
         # auto-disable Q after editingFinished
         try:
             self.q.editingFinished.connect(auto_disable_handler(self.q))
@@ -696,8 +921,12 @@ class OutputPanel(QGroupBox):
         for w in (self.q,):
             w.clear()
         # сохранить sigma/k как read-only 0.0
-        self.sigma.setText("0.0"); set_enabled(self.sigma, False)
-        self.k.setText("0.0"); set_enabled(self.k, False)
+        self.sigma.setText("0.0")
+        set_enabled(self.sigma, False)
+        self.k.setText("0.0")
+        set_enabled(self.k, False)
+    # schema label removed
+
 
 # ===================== ГЛАВНОЕ ОКНО =====================
 class MainWindow(QMainWindow):
@@ -705,39 +934,83 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Двухпоточный теплообмен")
         self.setFixedSize(1600, 875)
+        # статусная строка
+        self.status = self.statusBar()
+        try:
+            self.status.showMessage("Готово")
+        except Exception:
+            pass
 
-        central = QWidget(); self.setCentralWidget(central)
-        layout = QVBoxLayout(); central.setLayout(layout)
+        central = QWidget()
+        self.setCentralWidget(central)
+        layout = QVBoxLayout()
+        central.setLayout(layout)
 
         # потоки
-        row1 = QHBoxLayout(); layout.addLayout(row1)
+        row1 = QHBoxLayout()
+        layout.addLayout(row1)
         self.cold_panel = FlowPanel("Холодный поток", sign="−")
-        self.hot_panel  = FlowPanel("Горячий поток",  sign="+")
-        row1.addWidget(self.cold_panel.widget()); row1.addWidget(self.hot_panel.widget())
+        self.hot_panel = FlowPanel("Горячий поток", sign="+")
+        row1.addWidget(self.cold_panel.widget())
+        row1.addWidget(self.hot_panel.widget())
 
         # смеси
-        row2 = QHBoxLayout(); layout.addLayout(row2)
-        self.cold_mix = MixPanel("холодного потока", is_hot=False,
-                                 export_path=os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'csv', 'cold_mix.csv'))
-        self.hot_mix  = MixPanel("горячего потока",  is_hot=True,
-                                 export_path=os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'csv', 'hot_mix.csv'))
-        row2.addWidget(self.cold_mix.widget()); row2.addWidget(self.hot_mix.widget())
+        row2 = QHBoxLayout()
+        layout.addLayout(row2)
+        self.cold_mix = MixPanel(
+            "холодного потока",
+            is_hot=False,
+            export_path=os.path.join(
+                os.path.dirname(os.path.abspath(__file__)),
+                "data",
+                "csv",
+                "cold_mix.csv",
+            ),
+        )
+        self.hot_mix = MixPanel(
+            "горячего потока",
+            is_hot=True,
+            export_path=os.path.join(
+                os.path.dirname(os.path.abspath(__file__)), "data", "csv", "hot_mix.csv"
+            ),
+        )
+        row2.addWidget(self.cold_mix.widget())
+        row2.addWidget(self.hot_mix.widget())
+
+        # connect mix model changes to update button state and attempt minimal auto-calc
+        try:
+            self.cold_mix.model.dataChanged.connect(self._on_mix_changed)
+            self.cold_mix.model.rowsInserted.connect(self._on_mix_changed)
+            self.cold_mix.model.rowsRemoved.connect(self._on_mix_changed)
+            self.hot_mix.model.dataChanged.connect(self._on_mix_changed)
+            self.hot_mix.model.rowsInserted.connect(self._on_mix_changed)
+            self.hot_mix.model.rowsRemoved.connect(self._on_mix_changed)
+        except Exception:
+            pass
 
         # гидродинамика + правый столбец (OutputPanel + кнопки)
-        row3 = QHBoxLayout(); row3.setSpacing(12); layout.addLayout(row3)
-        self.hydro = HydroPanel(); row3.addWidget(self.hydro, 1)
+        row3 = QHBoxLayout()
+        row3.setSpacing(12)
+        layout.addLayout(row3)
+        self.hydro = HydroPanel()
+        row3.addWidget(self.hydro, 1)
 
         # правая колонка: OutputPanel + кнопки (чуть шире)
         right_col = QVBoxLayout()
-        right_col.setContentsMargins(0,0,0,0); right_col.setSpacing(8)
+        right_col.setContentsMargins(0, 0, 0, 0)
+        right_col.setSpacing(8)
         self.out_panel = OutputPanel()
         self.out_panel.setMinimumWidth(750)
         right_col.addWidget(self.out_panel)
-        btns = QHBoxLayout(); btns.setContentsMargins(0,0,0,0); btns.setSpacing(12)
-        self.calc_btn  = QPushButton("Вычислить")
+        btns = QHBoxLayout()
+        btns.setContentsMargins(0, 0, 0, 0)
+        btns.setSpacing(12)
+        self.calc_btn = QPushButton("Вычислить")
         self.reset_btn = QPushButton("Очистить входные параметры")
-        self.calc_btn.setMinimumHeight(36); self.reset_btn.setMinimumHeight(36)
-        btns.addWidget(self.calc_btn); btns.addWidget(self.reset_btn)
+        self.calc_btn.setMinimumHeight(36)
+        self.reset_btn.setMinimumHeight(36)
+        btns.addWidget(self.calc_btn)
+        btns.addWidget(self.reset_btn)
         right_col.addLayout(btns)
         right_col.addStretch(1)
         row3.addLayout(right_col, 0)
@@ -745,40 +1018,63 @@ class MainWindow(QMainWindow):
         # связи
         self.calc_btn.clicked.connect(self.on_calc)
         self.reset_btn.clicked.connect(self.on_reset)
+        # автопересчёт при смене схемы если есть пред. результат
+        try:
+            for rb in (
+                self.hydro.rb_mix_mix,
+                self.hydro.rb_parallel,
+                self.hydro.rb_mix_cold,
+                self.hydro.rb_mix_hot,
+                self.hydro.rb_counter,
+            ):
+                rb.toggled.connect(self._on_schema_changed)
+        except Exception:
+            pass
         # взаимная блокировка: ввод Q блокирует T+out и наоборот
         try:
             # используем editingFinished — расчёт выполняется после завершения ввода
             self.out_panel.q.editingFinished.connect(self._on_q_edit_finished)
-            self.hot_panel.t_out.editingFinished.connect(self._on_tplus_out_edit_finished)
+            self.hot_panel.t_out.editingFinished.connect(
+                self._on_tplus_out_edit_finished
+            )
         except Exception:
             pass
         # Подключим auto-calc при завершении ввода основных входных полей
         try:
-            for w in (self.cold_panel.t_in, self.cold_panel.t_out, self.cold_panel.m,
-                      self.hot_panel.t_in,  self.hot_panel.t_out,  self.hot_panel.m):
-                w.editingFinished.connect(self._try_auto_calc)
+            for w in (
+                self.cold_panel.t_in,
+                self.cold_panel.t_out,
+                self.cold_panel.m,
+                self.hot_panel.t_in,
+                self.hot_panel.t_out,
+                self.hot_panel.m,
+            ):
+                w.editingFinished.connect(self._normalize_input)
         except Exception:
             pass
         # Also trigger auto-calc when mixtures change (components/dolya edited or rows changed)
-        try:
-            self.cold_mix.model.dataChanged.connect(self._try_auto_calc)
-            self.cold_mix.model.rowsInserted.connect(self._try_auto_calc)
-            self.cold_mix.model.rowsRemoved.connect(self._try_auto_calc)
-            self.hot_mix.model.dataChanged.connect(self._try_auto_calc)
-            self.hot_mix.model.rowsInserted.connect(self._try_auto_calc)
-            self.hot_mix.model.rowsRemoved.connect(self._try_auto_calc)
-        except Exception:
-            pass
+        # Automatic recalculation on every mix change was removed to avoid noisy updates.
 
         # update calc button appearance when inputs change
         try:
-            for w in (self.cold_panel.t_in, self.cold_panel.t_out, self.cold_panel.m,
-                      self.hot_panel.t_in,  self.hot_panel.t_out,  self.hot_panel.m,
-                      self.cold_mix.model, self.hot_mix.model, self.out_panel.q):
-                # models provide signals; widgets provide editingFinished
-                try:
-                    w.editingFinished.connect(self._update_calc_button_state)
-                except Exception:
+            widgets_and_models = [
+                self.cold_panel.t_in,
+                self.cold_panel.t_out,
+                self.cold_panel.m,
+                self.hot_panel.t_in,
+                self.hot_panel.t_out,
+                self.hot_panel.m,
+                self.out_panel.q,
+            ]
+            for w in widgets_and_models:
+                # connect editingFinished if available
+                if hasattr(w, "editingFinished"):
+                    try:
+                        w.editingFinished.connect(self._update_calc_button_state)
+                    except Exception:
+                        pass
+                # connect dataChanged if available (models)
+                if hasattr(w, "dataChanged"):
                     try:
                         w.dataChanged.connect(self._update_calc_button_state)
                     except Exception:
@@ -789,15 +1085,29 @@ class MainWindow(QMainWindow):
         # initial update of button state
         self._update_calc_button_state()
 
+    def _on_mix_changed(self, *args) -> None:
+        """Handler for mix model changes: update calc button and attempt minimal auto-calc."""
+        try:
+            self._update_calc_button_state()
+        except Exception:
+            pass
+        try:
+            self._auto_calc_minimal()
+        except Exception:
+            pass
+
     def _can_compute_sigma_k(self) -> bool:
         """Return True if we have enough validated inputs to compute sigma and k."""
-        cold = self.cold_panel.to_dict(); hot = self.hot_panel.to_dict()
-        cold_mix = self.cold_mix.mix_rows(); hot_mix = self.hot_mix.mix_rows()
+        cold = self.cold_panel.to_dict()
+        hot = self.hot_panel.to_dict()
+        cold_mix = self.cold_mix.mix_rows()
+        hot_mix = self.hot_mix.mix_rows()
 
         def mix_valid(mix: list) -> bool:
             try:
-                if not mix: return False
-                s = sum(float(item.get('share', 0.0)) for item in mix)
+                if not mix:
+                    return False
+                s = sum(float(item.get("share", 0.0)) for item in mix)
                 return abs(s - 1.0) <= 1e-3
             except Exception:
                 return False
@@ -806,8 +1116,8 @@ class MainWindow(QMainWindow):
         if not self.out_panel.q.text().strip():
             return False
         # require both streams to have t_in and t_out and m and valid mixes
-        cold_ok = (cold['t_in'] and cold['t_out'] and cold['m']) and mix_valid(cold_mix)
-        hot_ok = (hot['t_in'] and hot['t_out'] and hot['m']) and mix_valid(hot_mix)
+        cold_ok = (cold["t_in"] and cold["t_out"] and cold["m"]) and mix_valid(cold_mix)
+        hot_ok = (hot["t_in"] and hot["t_out"] and hot["m"]) and mix_valid(hot_mix)
         return cold_ok and hot_ok
 
     def _update_calc_button_state(self) -> None:
@@ -816,9 +1126,9 @@ class MainWindow(QMainWindow):
             ready = self._can_compute_sigma_k()
             if ready:
                 # highlight: yellow background and bold
-                self.calc_btn.setStyleSheet('background: #ffec8b; font-weight: 700;')
+                self.calc_btn.setStyleSheet("background: #ffec8b; font-weight: 700;")
             else:
-                self.calc_btn.setStyleSheet('')
+                self.calc_btn.setStyleSheet("")
         except Exception:
             pass
 
@@ -840,17 +1150,30 @@ class MainWindow(QMainWindow):
             set_enabled(self.hot_panel.t_out, not has_q)
             if has_q:
                 # вызовем calculate и если вернётся t_out_plus — заполним
-                cold = self.cold_panel.to_dict(); hot = self.hot_panel.to_dict()
-                cold_mix = self.cold_mix.mix_rows(); hot_mix = self.hot_mix.mix_rows()
+                cold = self.cold_panel.to_dict()
+                hot = self.hot_panel.to_dict()
+                cold_mix = self.cold_mix.mix_rows()
+                hot_mix = self.hot_mix.mix_rows()
                 q_val = to_float(self.out_panel.q.text())
                 res = getattr(logic, "calculate", None)
                 if callable(res):
-                    ans = res(cold=cold, hot=hot, cold_mix=cold_mix, hot_mix=hot_mix, q=q_val)
-                    if "t_out_plus" in ans:
+                    ans = res(
+                        cold=cold,
+                        hot=hot,
+                        cold_mix=cold_mix,
+                        hot_mix=hot_mix,
+                        q=q_val,
+                        schema=self.hydro.current_schema(),
+                    )
+                    if isinstance(ans, dict) and "t_out_plus" in ans:
                         # временно блокируем сигналы при записи
                         self.hot_panel.t_out.blockSignals(True)
                         self.hot_panel.t_out.setText(f"{ans['t_out_plus']:.6g}")
                         self.hot_panel.t_out.blockSignals(False)
+                        try:
+                            self._update_calc_button_state()
+                        except Exception:
+                            pass
         except Exception:
             pass
 
@@ -860,37 +1183,105 @@ class MainWindow(QMainWindow):
             has_tout = self.hot_panel.t_out.text().strip() != ""
             set_enabled(self.out_panel.q, not has_tout)
             if has_tout:
-                cold = self.cold_panel.to_dict(); hot = self.hot_panel.to_dict()
-                cold_mix = self.cold_mix.mix_rows(); hot_mix = self.hot_mix.mix_rows()
+                cold = self.cold_panel.to_dict()
+                hot = self.hot_panel.to_dict()
+                cold_mix = self.cold_mix.mix_rows()
+                hot_mix = self.hot_mix.mix_rows()
                 q_val = to_float(self.out_panel.q.text())
                 res = getattr(logic, "calculate", None)
                 if callable(res):
-                    ans = res(cold=cold, hot=hot, cold_mix=cold_mix, hot_mix=hot_mix, q=q_val)
-                    if "q" in ans:
+                    ans = res(
+                        cold=cold,
+                        hot=hot,
+                        cold_mix=cold_mix,
+                        hot_mix=hot_mix,
+                        q=q_val,
+                        schema=self.hydro.current_schema(),
+                    )
+                    if isinstance(ans, dict) and "q" in ans:
                         self.out_panel.q.blockSignals(True)
                         self.out_panel.q.setText(f"{ans['q']:.6g}")
                         self.out_panel.q.blockSignals(False)
+                        try:
+                            self._update_calc_button_state()
+                        except Exception:
+                            pass
         except Exception:
             pass
 
     def on_calc(self) -> None:
         cold = self.cold_panel.to_dict()
-        hot  = self.hot_panel.to_dict()
+        hot = self.hot_panel.to_dict()
         cold_mix = self.cold_mix.mix_rows()
-        hot_mix  = self.hot_mix.mix_rows()
+        hot_mix = self.hot_mix.mix_rows()
         q_val = to_float(self.out_panel.q.text())
+        schema = self.hydro.current_schema()
 
         try:
             res = getattr(logic, "calculate", None)
             if callable(res):
-                ans = res(cold=cold, hot=hot, cold_mix=cold_mix, hot_mix=hot_mix, q=q_val)
-                if "sigma" in ans:
-                    self.out_panel.sigma.setText(format_num(ans['sigma']))
-                    set_enabled(self.out_panel.sigma, False)
-                if "k"     in ans:
-                    self.out_panel.k.setText(format_num(ans['k']))
+                ans = res(
+                    cold=cold,
+                    hot=hot,
+                    cold_mix=cold_mix,
+                    hot_mix=hot_mix,
+                    q=q_val,
+                    schema=schema,
+                )
+                if isinstance(ans, dict):
+                    if "sigma" in ans:
+                        self.out_panel.sigma.setText(format_num(ans["sigma"]))
+                        set_enabled(self.out_panel.sigma, False)
+                    if "k" in ans:
+                        self.out_panel.k.setText(format_num(ans["k"]))
+                        set_enabled(self.out_panel.k, False)
+                    # статус (не использовать слово "Schema" в выводе)
+                    try:
+                        k_src = ans.get("k_source", "")
+                        contact = ans.get("contact_type", "")
+                        q_show = ans.get("q", q_val)
+                        k_show = ans.get("k", 0.0)
+                        s_show = ans.get("sigma", 0.0)
+                        schema_display = str(ans.get("schema", schema))
+                        msg = f"{schema_display}  contact={contact or '-'}  k_source={k_src or '-'}  Q={q_show:.4g}  K={k_show:.4g}  σ={s_show:.4g}"
+                        self.status.showMessage(msg)
+                    except Exception:
+                        pass
                     set_enabled(self.out_panel.k, False)
-                if "q" in ans:
+                    # Если σ посчитана, но K отсутствует, попробуем ещё раз выполнить расчёт (возможно
+                    # теперь доступны дополнительные данные после записи t_out или q) и получить K.
+                    try:
+                        if isinstance(ans, dict) and ("sigma" in ans) and (not ans.get("k")):
+                            # reload inputs (t_out/q might have been filled above)
+                            cold2 = self.cold_panel.to_dict()
+                            hot2 = self.hot_panel.to_dict()
+                            cold_mix2 = self.cold_mix.mix_rows()
+                            hot_mix2 = self.hot_mix.mix_rows()
+                            q2 = float(ans.get("q", q_val) or q_val)
+                            res2 = getattr(logic, "calculate", None)
+                            if callable(res2):
+                                ans2 = res2(
+                                    cold=cold2,
+                                    hot=hot2,
+                                    cold_mix=cold_mix2,
+                                    hot_mix=hot_mix2,
+                                    q=q2,
+                                    schema=schema,
+                                )
+                                if isinstance(ans2, dict) and ans2.get("k"):
+                                    self.out_panel.k.setText(format_num(ans2.get("k")))
+                                    set_enabled(self.out_panel.k, False)
+                                    # update status with new k info
+                                    try:
+                                        k_src2 = ans2.get("k_source", "")
+                                        k_show2 = ans2.get("k", 0.0)
+                                        msg2 = f"{schema_display}  contact={contact or '-'}  k_source={k_src2 or '-'}  Q={q_show:.4g}  K={k_show2:.4g}  σ={s_show:.4g}"
+                                        self.status.showMessage(msg2)
+                                    except Exception:
+                                        pass
+                    except Exception:
+                        pass
+                if isinstance(ans, dict) and "q" in ans:
                     # записываем Q и делаем T+out недоступным для ввода
                     try:
                         self.out_panel.q.blockSignals(True)
@@ -899,11 +1290,27 @@ class MainWindow(QMainWindow):
                     except Exception:
                         pass
                     set_enabled(self.hot_panel.t_out, False)
-                if "t_out_plus" in ans:
+                if isinstance(ans, dict) and "t_out_plus" in ans:
                     self.hot_panel.t_out.setText(f"{ans['t_out_plus']:.6g}")
                     set_enabled(self.out_panel.q, False)
+                # persist schema selection (store current hydro schema id)
+                try:
+                    schema_path = os.path.join(
+                        os.path.dirname(os.path.abspath(__file__)),
+                        "data",
+                        "csv",
+                        "schema.txt",
+                    )
+                    with open(schema_path, "w", encoding="utf-8") as f:
+                        f.write(self.hydro.current_schema())
+                except Exception:
+                    pass
             else:
-                QMessageBox.information(self, "Расчёт", "Функция расчёта в logic.py не найдена. Заполните её.")
+                QMessageBox.information(
+                    self,
+                    "Расчёт",
+                    "Функция расчёта в logic.py не найдена. Заполните её.",
+                )
         except Exception as e:
             QMessageBox.warning(self, "Ошибка расчёта", str(e))
 
@@ -916,77 +1323,199 @@ class MainWindow(QMainWindow):
         cold_mix = self.cold_mix.mix_rows()
         hot_mix = self.hot_mix.mix_rows()
         q_val = to_float(self.out_panel.q.text())
+        schema = self.hydro.current_schema()
         try:
             res = getattr(logic, "calculate", None)
             if callable(res):
-                ans = res(cold=cold, hot=hot, cold_mix=cold_mix, hot_mix=hot_mix, q=q_val)
+                ans = res(
+                    cold=cold,
+                    hot=hot,
+                    cold_mix=cold_mix,
+                    hot_mix=hot_mix,
+                    q=q_val,
+                    schema=schema,
+                )
                 # Only apply q or t_out_plus if provided by calculation
-                if "q" in ans and (not self.out_panel.q.text().strip()):
+                if isinstance(ans, dict) and "q" in ans and (not self.out_panel.q.text().strip()):
                     try:
                         self.out_panel.q.blockSignals(True)
                         self.out_panel.q.setText(f"{ans['q']:.6g}")
                         self.out_panel.q.blockSignals(False)
                     except Exception:
                         pass
-                if "t_out_plus" in ans and (not self.hot_panel.t_out.text().strip()):
+                if isinstance(ans, dict) and "t_out_plus" in ans and (not self.hot_panel.t_out.text().strip()):
                     try:
                         self.hot_panel.t_out.blockSignals(True)
                         self.hot_panel.t_out.setText(f"{ans['t_out_plus']:.6g}")
                         self.hot_panel.t_out.blockSignals(False)
                     except Exception:
                         pass
+                # update button state after potential auto-fill
+                try:
+                    self._update_calc_button_state()
+                except Exception:
+                    pass
         except Exception:
             pass
 
     # --- сброс данных ---
     def on_reset(self) -> None:
-        # входные поля потоков
-        for w in (self.cold_panel.t_in, self.cold_panel.t_out, self.cold_panel.m, self.cold_panel.p,
-                  self.hot_panel.t_in,  self.hot_panel.t_out,  self.hot_panel.m,  self.hot_panel.p):
-            w.clear(); set_enabled(w, True)
-        # смеси
-        self.cold_mix.model.removeRows(0, self.cold_mix.model.rowCount())
-        self.hot_mix.model.removeRows(0, self.hot_mix.model.rowCount())
-        self.cold_mix.update_share_hint(); self.hot_mix.update_share_hint()
-        # гидродинамика по умолчанию
-        self.hydro.rb_mix_mix.setChecked(True)
-        # выходные параметры
-        self.out_panel.clear_values()
-        set_enabled(self.out_panel.q, True)
-        set_enabled(self.hot_panel.t_out, True)
+        """Полный сброс входных параметров и результатов в UI.
+        Очищает поля потоков, таблицы смесей и поля результатов (Q, σ, K).
+        """
+        try:
+            # clear flow panels
+            for w in (
+                self.cold_panel.t_in,
+                self.cold_panel.t_out,
+                self.cold_panel.m,
+                self.cold_panel.p,
+                self.hot_panel.t_in,
+                self.hot_panel.t_out,
+                self.hot_panel.m,
+                self.hot_panel.p,
+            ):
+                try:
+                    w.blockSignals(True)
+                    w.clear()
+                    w.blockSignals(False)
+                    set_enabled(w, True)
+                except Exception:
+                    pass
+
+            # clear mixtures
+            try:
+                if self.cold_mix.model.rowCount() > 0:
+                    self.cold_mix.model.removeRows(0, self.cold_mix.model.rowCount())
+                if self.hot_mix.model.rowCount() > 0:
+                    self.hot_mix.model.removeRows(0, self.hot_mix.model.rowCount())
+                # update hints/export
+                try:
+                    self.cold_mix.update_share_hint()
+                except Exception:
+                    pass
+                try:
+                    self.hot_mix.update_share_hint()
+                except Exception:
+                    pass
+            except Exception:
+                pass
+
+            # clear outputs
+            try:
+                self.out_panel.clear_values()
+            except Exception:
+                # fallback: direct resets
+                try:
+                    self.out_panel.q.clear()
+                except Exception:
+                    pass
+                try:
+                    self.out_panel.sigma.setText("0.0")
+                    set_enabled(self.out_panel.sigma, False)
+                except Exception:
+                    pass
+                try:
+                    self.out_panel.k.setText("0.0")
+                    set_enabled(self.out_panel.k, False)
+                except Exception:
+                    pass
+
+            # reset status
+            try:
+                self.status.showMessage("Сброшено")
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def _normalize_input(self) -> None:
+        """Нормализация числовых полей: замена запятой, удаление лишних ведущих нулей (кроме '0.'), очистка одиночного '0'."""
+        edits = [
+            self.cold_panel.t_in,
+            self.cold_panel.t_out,
+            self.cold_panel.m,
+            self.hot_panel.t_in,
+            self.hot_panel.t_out,
+            self.hot_panel.m,
+            self.out_panel.q,
+        ]
+        for w in edits:
+            try:
+                txt = w.text().strip()
+                if not txt:
+                    continue
+                txt = txt.replace(',', '.')
+                # если формат вроде 09 или 00012.3 -> убираем ведущие нули
+                if txt.count('.') <= 1:
+                    if txt.startswith('0') and len(txt) > 1 and not txt.startswith('0.'):
+                        # убрать все ведущие нули, оставить один перед точкой если была
+                        if '.' in txt:
+                            int_part, frac_part = txt.split('.', 1)
+                            int_part = int_part.lstrip('0') or '0'
+                            txt = int_part + ('.' + frac_part if frac_part != '' else '')
+                        else:
+                            txt = txt.lstrip('0') or '0'
+                w.blockSignals(True)
+                w.setText(txt)
+                w.blockSignals(False)
+            except Exception:
+                pass
+        # after normalizing inputs, attempt only the minimal auto-calc helper
+        try:
+            self._try_auto_calc()
+        except Exception:
+            pass
+        try:
+            self._update_calc_button_state()
+        except Exception:
+            pass
+
 
     def _try_auto_calc(self) -> None:
         """Попытаться выполнить расчёт автоматически (вызывается после editingFinished важных полей)."""
         try:
             # Проверим, есть ли все необходимые входы для автоматического вычисления
-            cold = self.cold_panel.to_dict(); hot = self.hot_panel.to_dict()
-            cold_mix = self.cold_mix.mix_rows(); hot_mix = self.hot_mix.mix_rows()
+            cold = self.cold_panel.to_dict()
+            hot = self.hot_panel.to_dict()
+            cold_mix = self.cold_mix.mix_rows()
+            hot_mix = self.hot_mix.mix_rows()
             q_text = self.out_panel.q.text().strip()
             t_out_hot_text = self.hot_panel.t_out.text().strip()
 
-            def mix_valid(mix: list) -> bool:
+            from typing import List, Dict
+
+            def mix_valid(mix: List[Dict[str, Any]]) -> bool:
                 try:
-                    if not mix: return False
-                    s = sum(float(item.get('share', 0.0)) for item in mix)
+                    if not mix:
+                        return False
+                    s = sum(float(item.get("share", 0.0)) for item in mix)
                     return abs(s - 1.0) <= 1e-3
                 except Exception:
                     return False
 
             # 1) If Q is empty and we have sufficient data in either stream -> compute Q
             if not q_text:
-                cold_ready = (cold['t_in'] and cold['t_out'] and cold['m']) and mix_valid(cold_mix)
-                hot_ready = (hot['t_in'] and hot['t_out'] and hot['m']) and mix_valid(hot_mix)
+                cold_ready = (
+                    cold["t_in"] and cold["t_out"] and cold["m"]
+                ) and mix_valid(cold_mix)
+                hot_ready = (hot["t_in"] and hot["t_out"] and hot["m"]) and mix_valid(
+                    hot_mix
+                )
                 if cold_ready or hot_ready:
-                    self._auto_calc_minimal(); return
+                    self._auto_calc_minimal()
+                    return
 
             # 2) If t_out_hot is empty but Q is given and hot stream data + mix are valid -> compute t_out_hot
             if not t_out_hot_text and q_text:
-                hot_ready_for_tout = (hot['t_in'] and hot['m']) and mix_valid(hot_mix)
+                hot_ready_for_tout = (hot["t_in"] and hot["m"]) and mix_valid(hot_mix)
                 if hot_ready_for_tout:
-                    self._auto_calc_minimal(); return
+                    self._auto_calc_minimal()
+                    return
             # otherwise do nothing
         except Exception:
             pass
+
 
 """Модуль interface: содержит классы GUI (панели и главное окно).
 
