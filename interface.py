@@ -1,6 +1,9 @@
 # interface.py
 import os
 import csv
+import logging
+from datetime import datetime
+from pathlib import Path
 from typing import Callable, TypedDict, Any, List, Dict, Optional, Sequence, cast
 
 from PyQt5.QtGui import (
@@ -17,6 +20,7 @@ from PyQt5.QtCore import (
     QEvent,
     QModelIndex,
     QSortFilterProxyModel,
+    QTimer,
 )
 from PyQt5.QtWidgets import (
     QMainWindow,
@@ -38,9 +42,26 @@ from PyQt5.QtWidgets import (
     QFrame,
     QAction,
     QFileDialog,
+    QTextEdit,
+    QDialog,
+    QDialogButtonBox,
 )
 
 import logic  # модуль расчётов
+
+LOG_DIR = Path(os.path.dirname(os.path.abspath(__file__))) / "logs"
+LOG_DIR.mkdir(exist_ok=True)
+LOG_FILE = LOG_DIR / "app.log"
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.FileHandler(LOG_FILE, encoding="utf-8"),
+        logging.StreamHandler(),
+    ],
+)
+logger = logging.getLogger(__name__)
+
 try:
     import openpyxl  # type: ignore
 except Exception:
@@ -461,14 +482,17 @@ class MixModel(QStandardItemModel):
                 return float(txt.replace(",", ".")) if c != self.COL_NAME else txt
 
             out.append(
-                cast(MixRow, {
-                    "name": v(self.COL_NAME),
-                    "share": v(self.COL_SHARE),
-                    "tb": v(self.COL_TB),
-                    "cf": v(self.COL_CF),
-                    "cp": v(self.COL_CP),
-                    "rf": v(self.COL_RF),
-                })
+                cast(
+                    MixRow,
+                    {
+                        "name": v(self.COL_NAME),
+                        "share": v(self.COL_SHARE),
+                        "tb": v(self.COL_TB),
+                        "cf": v(self.COL_CF),
+                        "cp": v(self.COL_CP),
+                        "rf": v(self.COL_RF),
+                    },
+                )
             )
         return out
 
@@ -500,10 +524,11 @@ class MixPanel:
         top.addWidget(QLabel("Доля"))
         top.addWidget(self.share)
         top.addSpacing(8)
+        # Перестановка: сначала кнопка Добавить, затем поле суммы
+        top.addWidget(self.add_btn)
+        top.addSpacing(8)
         top.addWidget(QLabel("Сумма"))
         top.addWidget(self.sum_field)
-        top.addSpacing(8)
-        top.addWidget(self.add_btn)
         v.addLayout(top)
 
         # источник параметров
@@ -656,9 +681,19 @@ class MixPanel:
         return s
 
     def update_share_hint(self) -> None:
-        remaining = max(0.0, 1.0 - self.current_sum())
+        total = self.current_sum()
+        remaining = max(0.0, 1.0 - total)
         self.share.setPlaceholderText(f"≤ {remaining:.5f}")
-        self.sum_field.setText(f"{1.0-remaining:.5f}")
+        self.sum_field.setText(f"{total:.5f}")
+        try:
+            if abs(total - 1.0) <= 1e-4:
+                # зелёный при корректной сумме
+                self.sum_field.setStyleSheet("QLineEdit { background:#d9f7d9; }")
+            else:
+                # красный пока не 1.0
+                self.sum_field.setStyleSheet("QLineEdit { background:#ffd6d6; }")
+        except Exception:
+            pass
 
     def on_mode_change(self, _checked: bool) -> None:
         manual = self.rb_manual.isChecked()
@@ -742,16 +777,15 @@ class MixPanel:
         self.share.clear()
 
     def ask_delete(self, count: int) -> bool:
-        return (
-            QMessageBox.question(
-                self.box,
-                "Удаление",
-                f"Удалить {count} строку(и)?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No,
-            )
-            == QMessageBox.Yes
-        )
+        box = QMessageBox(self.box)
+        box.setIcon(QMessageBox.Question)
+        box.setWindowTitle("Удаление")
+        box.setText(f"Удалить {count} строку(и)?")
+        yes_btn = box.addButton("Да", QMessageBox.AcceptRole)
+        no_btn = box.addButton("Нет", QMessageBox.RejectRole)
+        box.setDefaultButton(no_btn)  # по умолчанию Нет
+        box.exec_()
+        return box.clickedButton() is yes_btn
 
     def selected_source_rows(self) -> List[int]:
         rows: List[int] = []
@@ -830,7 +864,7 @@ class HydroPanel(QGroupBox):
         self.image_label.setFixedSize(350, 175)
         self.image_label.setFrameShape(QFrame.Box)
         self.image_label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        right.addWidget(self.image_label, 0, Qt.AlignVCenter | Qt.AlignHCenter)
+        right.addWidget(self.image_label, 0, Qt.AlignTop | Qt.AlignHCenter)
 
         def _on_rb_mix_mix_toggled(on: bool) -> None:
             if on:
@@ -956,14 +990,19 @@ class MainWindow(QMainWindow):
         self._importing = False
         # after importing, suppress full sigma/K calculation on schema toggle until user presses Calculate
         self._suppress_full_calc_after_import = False
+        # track changes after import to show recalc button
+        self._post_import_changed = False
         self.setWindowTitle("Двухпоточный теплообмен")
-        self.setFixedSize(1600, 875)
+        self.setFixedSize(1600, 1050)
         # статусная строка
         self.status = self.statusBar()
         try:
             self.status.showMessage("Готово")
         except Exception:
             pass
+        # флаг: было ли явное нажатие кнопки Вычислить после последнего изменения схемы/сброса
+        self._explicit_calc_done = False
+        self._results_stale = False
 
         # File menu: Import/Export inputs (JSON)
         try:
@@ -980,8 +1019,20 @@ class MainWindow(QMainWindow):
             exp_act.triggered.connect(self.export_inputs)  # type: ignore[call-arg]
             imp_xlsx.triggered.connect(self.import_inputs_xlsx)  # type: ignore[call-arg]
             exp_xlsx.triggered.connect(self.export_inputs_xlsx)  # type: ignore[call-arg]
-        except Exception:
-            pass
+            # --- Меню помощи ---
+            help_menu = self.menuBar().addMenu("Помощь")
+            act_help = QAction("Справка", self)
+            act_logs = QAction("Логи", self)
+            act_about = QAction("О программе", self)
+            help_menu.addAction(act_help)
+            help_menu.addAction(act_logs)
+            help_menu.addSeparator()
+            help_menu.addAction(act_about)
+            act_help.triggered.connect(self.show_help_dialog)
+            act_logs.triggered.connect(self.show_logs_dialog)
+            act_about.triggered.connect(self.show_about_dialog)
+        except Exception as e:
+            logger.exception("Ошибка создания меню: %s", e)
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -1044,16 +1095,53 @@ class MainWindow(QMainWindow):
         self.out_panel = OutputPanel()
         self.out_panel.setMinimumWidth(750)
         right_col.addWidget(self.out_panel)
-        btns = QHBoxLayout()
+        btns = QVBoxLayout()
         btns.setContentsMargins(0, 0, 0, 0)
-        btns.setSpacing(12)
+        btns.setSpacing(8)
         self.calc_btn = QPushButton("Вычислить")
-        self.reset_btn = QPushButton("Очистить входные параметры")
+        self.reset_btn = QPushButton("Очистить параметры")
         self.calc_btn.setMinimumHeight(36)
         self.reset_btn.setMinimumHeight(36)
+        self.analysis_btn = QPushButton("Провести анализ")
+        self.analysis_btn.setToolTip("Провести анализ изменяя доли компонентов потоков")
+        self.analysis_btn.setMinimumHeight(36)
+        self.recalc_btn = QPushButton("Перерасчёт")
+        self.recalc_btn.setToolTip("Пересчитать после изменений")
+        self.recalc_btn.setMinimumHeight(36)
+        self.recalc_btn.hide()
         btns.addWidget(self.calc_btn)
+        btns.addWidget(self.recalc_btn)
+        btns.addWidget(self.analysis_btn)
         btns.addWidget(self.reset_btn)
         right_col.addLayout(btns)
+        # таймер мигания для кнопки перерасчёта
+        from PyQt5.QtCore import QTimer as _QTimer
+
+        self._recalc_blink_state = False
+
+        def _blink_recalc():
+            try:
+                if not self.recalc_btn.isVisible():
+                    # вернуть стандартный стиль
+                    self.recalc_btn.setStyleSheet("")
+                    return
+                self._recalc_blink_state = not getattr(
+                    self, "_recalc_blink_state", False
+                )
+                if self._recalc_blink_state:
+                    self.recalc_btn.setStyleSheet(
+                        "QPushButton { background:#ff4d4f; color:white; font-weight:bold; }"
+                    )
+                else:
+                    self.recalc_btn.setStyleSheet(
+                        "QPushButton { background:#ffcccc; color:#800; font-weight:bold; }"
+                    )
+            except Exception:
+                pass
+
+        self._recalc_blink_timer = _QTimer(self)
+        self._recalc_blink_timer.timeout.connect(_blink_recalc)  # type: ignore
+        self._recalc_blink_timer.start(700)
         right_col.addStretch(1)
         row3.addLayout(right_col, 0)
 
@@ -1064,7 +1152,15 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         try:
+            self.recalc_btn.clicked.connect(self._on_recalc_clicked)
+        except Exception:
+            pass
+        try:
             self.reset_btn.clicked.connect(self.on_reset)
+        except Exception:
+            pass
+        try:
+            self.analysis_btn.clicked.connect(self.open_analysis_window)
         except Exception:
             pass
         # автопересчёт при смене схемы если есть пред. результат
@@ -1134,6 +1230,39 @@ class MainWindow(QMainWindow):
         # initial update of button state
         self._update_calc_button_state()
 
+        # Подключим слежение за изменениями полей потоков для пометки устаревания результатов
+        try:
+
+            def _mark_change():
+                try:
+                    self._mark_stale_results()
+                except Exception:
+                    pass
+
+            for w in (
+                self.cold_panel.t_in,
+                self.cold_panel.t_out,
+                self.cold_panel.m,
+                self.cold_panel.p,
+                self.hot_panel.t_in,
+                self.hot_panel.t_out,
+                self.hot_panel.m,
+                self.hot_panel.p,
+                self.out_panel.q,
+            ):
+                try:
+                    w.editingFinished.connect(_mark_change)  # type: ignore
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        # Снять стартовый фокус с поля T_in холодного потока (курсор не должен мигать там при запуске)
+        try:
+            QTimer.singleShot(0, self._remove_initial_focus)  # type: ignore[arg-type]
+        except Exception:
+            pass
+
     def _on_mix_changed(self, *args: Any) -> None:
         """Handler for mix model changes: update calc button and attempt minimal auto-calc."""
         try:
@@ -1142,6 +1271,25 @@ class MainWindow(QMainWindow):
             pass
         try:
             self._auto_calc_minimal()
+        except Exception:
+            pass
+        # Любое изменение смеси после первого явного вычисления делает результаты устаревшими
+        try:
+            if getattr(self, "_explicit_calc_done", False):
+                self._results_stale = True
+                if self._mix_valid(self.cold_mix.mix_rows()) and self._mix_valid(
+                    self.hot_mix.mix_rows()
+                ):
+                    self.recalc_btn.show()
+        except Exception:
+            pass
+
+    def _remove_initial_focus(self) -> None:
+        """Убирает фокус с поля температуры на входе холодного потока при старте."""
+        try:
+            self.cold_panel.t_in.clearFocus()
+            # Переводим фокус на главное окно (ничто не редактируется по умолчанию)
+            self.setFocus(Qt.OtherFocusReason)
         except Exception:
             pass
 
@@ -1155,6 +1303,16 @@ class MainWindow(QMainWindow):
             self.on_calc()
         except Exception:
             pass
+        try:
+            self._explicit_calc_done = True
+            self._results_stale = False
+            self.recalc_btn.hide()
+            try:
+                self.status.showMessage("Вычисления выполнены успешно", 4000)
+            except Exception:
+                pass
+        except Exception:
+            pass
 
     def _on_schema_changed(self, checked: bool) -> None:
         """Called when hydro schema radio buttons toggle.
@@ -1163,14 +1321,18 @@ class MainWindow(QMainWindow):
         try:
             if not checked:
                 return
-            # During import or immediately after import we only want minimal auto-fill
-            # (t_out or q), not full sigma/K calculation.
-            if getattr(self, "_importing", False) or getattr(self, "_suppress_full_calc_after_import", False):
+            # Если ещё не было явного нажатия Вычислить, то ограничиваемся минимальным авторасчётом
+            if (
+                (not getattr(self, "_explicit_calc_done", False))
+                or getattr(self, "_importing", False)
+                or getattr(self, "_suppress_full_calc_after_import", False)
+            ):
                 try:
                     self._try_auto_calc()
                 except Exception:
                     pass
                 return
+            # Полный пересчёт только после явного вычисления
             try:
                 self.on_calc()
             except Exception:
@@ -1223,10 +1385,13 @@ class MainWindow(QMainWindow):
         - mix_cold / mix_hot: columns name,share,tb,cf,cp,rf
         """
         try:
-            path, _ = QFileDialog.getSaveFileName(self, "Экспорт входных данных", "", "CSV Files (*.csv);;All Files (*)")
+            path, _ = QFileDialog.getSaveFileName(
+                self, "Экспорт входных данных", "", "CSV Files (*.csv);;All Files (*)"
+            )
             if not path:
                 return
             data = self._gather_inputs_for_export()
+
             # Helper to protect Excel from auto-formatting values (dates/numbers)
             def protect_for_excel(val: Any) -> str:
                 s = str(val)
@@ -1239,6 +1404,7 @@ class MainWindow(QMainWindow):
                 if s.startswith("0") and len(s) > 1 and s[1].isdigit():
                     return "'" + s
                 return s
+
             with open(path, "w", newline="", encoding="utf-8-sig") as f:
                 w = csv.writer(f, delimiter=";")
                 # flows
@@ -1246,16 +1412,68 @@ class MainWindow(QMainWindow):
                 w.writerow(["type", "K", "K", "kg/s", "kg/m^2"])
                 cold = cast(Dict[str, Any], data.get("cold") or {})
                 hot = cast(Dict[str, Any], data.get("hot") or {})
-                w.writerow(["flow_cold", protect_for_excel(cold.get("t_in", "")), protect_for_excel(cold.get("t_out", "")), protect_for_excel(cold.get("m", "")), protect_for_excel(cold.get("p", ""))])
-                w.writerow(["flow_hot", protect_for_excel(hot.get("t_in", "")), protect_for_excel(hot.get("t_out", "")), protect_for_excel(hot.get("m", "")), protect_for_excel(hot.get("p", ""))])
+                w.writerow(
+                    [
+                        "flow_cold",
+                        protect_for_excel(cold.get("t_in", "")),
+                        protect_for_excel(cold.get("t_out", "")),
+                        protect_for_excel(cold.get("m", "")),
+                        protect_for_excel(cold.get("p", "")),
+                    ]
+                )
+                w.writerow(
+                    [
+                        "flow_hot",
+                        protect_for_excel(hot.get("t_in", "")),
+                        protect_for_excel(hot.get("t_out", "")),
+                        protect_for_excel(hot.get("m", "")),
+                        protect_for_excel(hot.get("p", "")),
+                    ]
+                )
                 # mixes
                 w.writerow([])
                 w.writerow(["section", "name", "share", "tb", "cf", "cp", "rf"])
-                w.writerow(["type", "str", "fraction", "K", "kJ/kg*K", "kJ/kg*K", "kJ/kg"])
+                w.writerow(
+                    ["type", "str", "fraction", "K", "kJ/kg*K", "kJ/kg*K", "kJ/kg"]
+                )
+
+                def _nz(v: Any) -> str:
+                    try:
+                        if v in (None, ""):
+                            return ""
+                        if isinstance(v, (int, float)) and float(v) == 0.0:
+                            return ""
+                        s = str(v)
+                        if s.replace(".", "", 1).isdigit() and float(s) == 0.0:
+                            return ""
+                        return protect_for_excel(v)
+                    except Exception:
+                        return ""
+
                 for r in data.get("cold_mix", []):
-                    w.writerow(["mix_cold", protect_for_excel(r.get("name", "")), protect_for_excel(r.get("share", "")), protect_for_excel(r.get("tb", "")), protect_for_excel(r.get("cf", "")), protect_for_excel(r.get("cp", "")), protect_for_excel(r.get("rf", ""))])
+                    w.writerow(
+                        [
+                            "mix_cold",
+                            protect_for_excel(r.get("name", "")),
+                            _nz(r.get("share", "")),
+                            _nz(r.get("tb", "")),
+                            _nz(r.get("cf", "")),
+                            _nz(r.get("cp", "")),
+                            _nz(r.get("rf", "")),
+                        ]
+                    )
                 for r in data.get("hot_mix", []):
-                    w.writerow(["mix_hot", protect_for_excel(r.get("name", "")), protect_for_excel(r.get("share", "")), protect_for_excel(r.get("tb", "")), protect_for_excel(r.get("cf", "")), protect_for_excel(r.get("cp", "")), protect_for_excel(r.get("rf", ""))])
+                    w.writerow(
+                        [
+                            "mix_hot",
+                            protect_for_excel(r.get("name", "")),
+                            _nz(r.get("share", "")),
+                            _nz(r.get("tb", "")),
+                            _nz(r.get("cf", "")),
+                            _nz(r.get("cp", "")),
+                            _nz(r.get("rf", "")),
+                        ]
+                    )
                 # schema and q
                 w.writerow([])
                 w.writerow(["meta", "schema", data.get("schema", "")])
@@ -1266,10 +1484,16 @@ class MainWindow(QMainWindow):
     def export_inputs_xlsx(self) -> None:
         """Export inputs to an .xlsx workbook with separate sheets for flows and mixes."""
         if openpyxl is None:
-            QMessageBox.warning(self, "Excel экспорт", "Требуется пакет openpyxl. Установите его в окружение.")
+            QMessageBox.warning(
+                self,
+                "Excel экспорт",
+                "Требуется пакет openpyxl. Установите его в окружение.",
+            )
             return
         try:
-            path, _ = QFileDialog.getSaveFileName(self, "Экспорт в Excel", "", "Excel Files (*.xlsx);;All Files (*)")
+            path, _ = QFileDialog.getSaveFileName(
+                self, "Экспорт в Excel", "", "Excel Files (*.xlsx);;All Files (*)"
+            )
             if not path:
                 return
             data = self._gather_inputs_for_export()
@@ -1281,17 +1505,51 @@ class MainWindow(QMainWindow):
             ws1.append(["section", "t_in", "t_out", "m", "p"])
             cold = cast(Dict[str, Any], data.get("cold") or {})
             hot = cast(Dict[str, Any], data.get("hot") or {})
-            ws1.append(["flow_cold", cold.get("t_in", ""), cold.get("t_out", ""), cold.get("m", ""), cold.get("p", "")])
-            ws1.append(["flow_hot", hot.get("t_in", ""), hot.get("t_out", ""), hot.get("m", ""), hot.get("p", "")])
+            ws1.append(
+                [
+                    "flow_cold",
+                    cold.get("t_in", ""),
+                    cold.get("t_out", ""),
+                    cold.get("m", ""),
+                    cold.get("p", ""),
+                ]
+            )
+            ws1.append(
+                [
+                    "flow_hot",
+                    hot.get("t_in", ""),
+                    hot.get("t_out", ""),
+                    hot.get("m", ""),
+                    hot.get("p", ""),
+                ]
+            )
             # mixes
             ws2 = wb.create_sheet("mix_cold")
             ws2.append(["name", "share", "tb", "cf", "cp", "rf"])
             for r in data.get("cold_mix", []):
-                ws2.append([r.get("name", ""), r.get("share", ""), r.get("tb", ""), r.get("cf", ""), r.get("cp", ""), r.get("rf", "")])
+                ws2.append(
+                    [
+                        r.get("name", ""),
+                        r.get("share", ""),
+                        r.get("tb", ""),
+                        r.get("cf", ""),
+                        r.get("cp", ""),
+                        r.get("rf", ""),
+                    ]
+                )
             ws3 = wb.create_sheet("mix_hot")
             ws3.append(["name", "share", "tb", "cf", "cp", "rf"])
             for r in data.get("hot_mix", []):
-                ws3.append([r.get("name", ""), r.get("share", ""), r.get("tb", ""), r.get("cf", ""), r.get("cp", ""), r.get("rf", "")])
+                ws3.append(
+                    [
+                        r.get("name", ""),
+                        r.get("share", ""),
+                        r.get("tb", ""),
+                        r.get("cf", ""),
+                        r.get("cp", ""),
+                        r.get("rf", ""),
+                    ]
+                )
             # meta
             ws_meta = wb.create_sheet("meta")
             ws_meta.append(["schema", data.get("schema", "")])
@@ -1303,11 +1561,17 @@ class MainWindow(QMainWindow):
     def import_inputs_xlsx(self) -> None:
         """Import inputs from an .xlsx workbook created by `export_inputs_xlsx`."""
         if openpyxl is None:
-            QMessageBox.warning(self, "Excel импорт", "Требуется пакет openpyxl. Установите его в окружение.")
+            QMessageBox.warning(
+                self,
+                "Excel импорт",
+                "Требуется пакет openpyxl. Установите его в окружение.",
+            )
             return
         try:
             self._importing = True
-            path, _ = QFileDialog.getOpenFileName(self, "Импорт из Excel", "", "Excel Files (*.xlsx);;All Files (*)")
+            path, _ = QFileDialog.getOpenFileName(
+                self, "Импорт из Excel", "", "Excel Files (*.xlsx);;All Files (*)"
+            )
             if not path:
                 return
             wb = openpyxl.load_workbook(path, data_only=True)
@@ -1323,7 +1587,9 @@ class MainWindow(QMainWindow):
                     # safe extraction from tuples that may have variable length
                     from typing import Optional, Sequence
 
-                    def safe_get(cell_tuple: Optional[Sequence[Any]], idx: int, default: str = "") -> str:
+                    def safe_get(
+                        cell_tuple: Optional[Sequence[Any]], idx: int, default: str = ""
+                    ) -> str:
                         try:
                             if not cell_tuple or len(cell_tuple) <= idx:
                                 return default
@@ -1342,7 +1608,10 @@ class MainWindow(QMainWindow):
                     self.hot_panel.m.setText(safe_get(fh, 3))
                     self.hot_panel.p.setText(safe_get(fh, 4))
             # mixes
-            for name, target in (("mix_cold", self.cold_mix), ("mix_hot", self.hot_mix)):
+            for name, target in (
+                ("mix_cold", self.cold_mix),
+                ("mix_hot", self.hot_mix),
+            ):
                 if name in wb.sheetnames:
                     try:
                         ws = cast(Any, wb[name])
@@ -1366,14 +1635,56 @@ class MainWindow(QMainWindow):
                             except Exception:
                                 return ""
 
+                        import re as _re
+
+                        _date_res = [
+                            _re.compile(r"^\d{4}[-/]\d{2}[-/]\d{2}$"),
+                            _re.compile(r"^\d{2}[-./]\d{2}[-./]\d{4}$"),
+                        ]
+
+                        def _is_bad_share(raw: Any, numeric: float) -> bool:
+                            try:
+                                if numeric == 0.0:
+                                    return True
+                                if raw is None:
+                                    return False
+                                s = str(raw).strip()
+                                if _re.search(r"[A-Za-zА-Яа-я]", s):
+                                    return True
+                                for rg in _date_res:
+                                    if rg.match(s):
+                                        return True
+                                return False
+                            except Exception:
+                                return True
+
                         for row in rows:
                             try:
                                 nm = cell_to_str(row[0]) if row and len(row) > 0 else ""
-                                share = cell_to_float(row[1]) if row and len(row) > 1 else 0.0
-                                tb = cell_to_float(row[2]) if row and len(row) > 2 else 0.0
-                                cf = cell_to_float(row[3]) if row and len(row) > 3 else 0.0
-                                cp = cell_to_float(row[4]) if row and len(row) > 4 else 0.0
-                                rf = cell_to_float(row[5]) if row and len(row) > 5 else 0.0
+                                raw_share = row[1] if row and len(row) > 1 else None
+                                share = cell_to_float(raw_share)
+                                if _is_bad_share(raw_share, share):
+                                    continue
+                                tb = (
+                                    cell_to_float(row[2])
+                                    if row and len(row) > 2
+                                    else 0.0
+                                )
+                                cf = (
+                                    cell_to_float(row[3])
+                                    if row and len(row) > 3
+                                    else 0.0
+                                )
+                                cp = (
+                                    cell_to_float(row[4])
+                                    if row and len(row) > 4
+                                    else 0.0
+                                )
+                                rf = (
+                                    cell_to_float(row[5])
+                                    if row and len(row) > 5
+                                    else 0.0
+                                )
                                 target.model.add_or_update(nm, share, tb, cf, cp, rf)
                             except Exception:
                                 pass
@@ -1417,6 +1728,12 @@ class MainWindow(QMainWindow):
                 self._suppress_full_calc_after_import = True
             except Exception:
                 pass
+            try:
+                self._post_import_changed = False
+                self.recalc_btn.hide()
+                self._lock_imported_fields()
+            except Exception:
+                pass
         except Exception as e:
             QMessageBox.warning(self, "Ошибка импорта Excel", str(e))
         finally:
@@ -1430,6 +1747,28 @@ class MainWindow(QMainWindow):
         During import only minimal auto-fill is performed (t_out or q). Full sigma/K
         calculation is not executed; user should press "Вычислить" to compute σ и K.
         """
+        import re
+
+        date_regexes = [
+            re.compile(r"^\d{4}[-/]\d{2}[-/]\d{2}$"),  # YYYY-MM-DD or YYYY/MM/DD
+            re.compile(
+                r"^\d{2}[-./]\d{2}[-./]\d{4}$"
+            ),  # DD-MM-YYYY / DD.MM.YYYY / DD/MM/YYYY
+        ]
+
+        def _is_invalid_token(tok: str) -> bool:
+            t = tok.strip()
+            if not t:
+                return False
+            # letters present
+            if re.search(r"[A-Za-zА-Яа-я]", t):
+                return True
+            # date like patterns
+            for rg in date_regexes:
+                if rg.match(t):
+                    return True
+            return False
+
         flows: Dict[str, Dict[str, str]] = {"flow_cold": {}, "flow_hot": {}}
         cold_mix: List[Dict[str, Any]] = []
         hot_mix: List[Dict[str, Any]] = []
@@ -1437,7 +1776,9 @@ class MainWindow(QMainWindow):
         q_val: Optional[str] = None
         try:
             self._importing = True
-            path, _ = QFileDialog.getOpenFileName(self, "Импорт входных данных", "", "CSV Files (*.csv);;All Files (*)")
+            path, _ = QFileDialog.getOpenFileName(
+                self, "Импорт входных данных", "", "CSV Files (*.csv);;All Files (*)"
+            )
             if not path:
                 return
             with open(path, "r", encoding="utf-8-sig") as f:
@@ -1455,10 +1796,18 @@ class MainWindow(QMainWindow):
                                 return x[1:]
                             return x
 
-                        flows[first]["t_in"] = strip_protect(row[1]) if len(row) > 1 else ""
-                        flows[first]["t_out"] = strip_protect(row[2]) if len(row) > 2 else ""
-                        flows[first]["m"] = strip_protect(row[3]) if len(row) > 3 else ""
-                        flows[first]["p"] = strip_protect(row[4]) if len(row) > 4 else ""
+                        val_t_in = strip_protect(row[1]) if len(row) > 1 else ""
+                        val_t_out = strip_protect(row[2]) if len(row) > 2 else ""
+                        val_m = strip_protect(row[3]) if len(row) > 3 else ""
+                        val_p = strip_protect(row[4]) if len(row) > 4 else ""
+                        flows[first]["t_in"] = (
+                            "" if _is_invalid_token(val_t_in) else val_t_in
+                        )
+                        flows[first]["t_out"] = (
+                            "" if _is_invalid_token(val_t_out) else val_t_out
+                        )
+                        flows[first]["m"] = "" if _is_invalid_token(val_m) else val_m
+                        flows[first]["p"] = "" if _is_invalid_token(val_p) else val_p
                         continue
                     if first in ("mix_cold", "mix_hot"):
                         name = row[1] if len(row) > 1 else ""
@@ -1467,17 +1816,54 @@ class MainWindow(QMainWindow):
                         cf = row[4] if len(row) > 4 else "0"
                         cp = row[5] if len(row) > 5 else "0"
                         rf = row[6] if len(row) > 6 else "0"
+                        # если числовые поля не валидны (слово/дата) – делаем их пустыми чтобы fallback -> 0.0
+                        for var_name, raw in [
+                            ("share", share),
+                            ("tb", tb),
+                            ("cf", cf),
+                            ("cp", cp),
+                            ("rf", rf),
+                        ]:
+                            if _is_invalid_token(raw):
+                                if var_name == "share":
+                                    share = ""
+                                elif var_name == "tb":
+                                    tb = ""
+                                elif var_name == "cf":
+                                    cf = ""
+                                elif var_name == "cp":
+                                    cp = ""
+                                elif var_name == "rf":
+                                    rf = ""
+                        # проверка доли: если не число или 0 -> пропускаем компонент
+                        share_is_valid = False
                         try:
+                            share_val_tmp = (
+                                float(share.replace(",", ".")) if share.strip() else 0.0
+                            )
+                            if share_val_tmp != 0.0:
+                                share_is_valid = True
+                        except Exception:
+                            share_is_valid = False
+                        if not share_is_valid:
+                            continue
+                        try:
+                            share_f = float(share.replace(",", "."))
+                            tb_f = float(tb.replace(",", "."))
+                            cf_f = float(cf.replace(",", "."))
+                            cp_f = float(cp.replace(",", "."))
+                            rf_f = float(rf.replace(",", "."))
                             rec = {
                                 "name": name,
-                                "share": float(share.replace(",", ".")),
-                                "tb": float(tb.replace(",", ".")),
-                                "cf": float(cf.replace(",", ".")),
-                                "cp": float(cp.replace(",", ".")),
-                                "rf": float(rf.replace(",", ".")),
+                                "share": share_f,
+                                "tb": tb_f,
+                                "cf": cf_f,
+                                "cp": cp_f,
+                                "rf": rf_f,
                             }
                         except Exception:
-                            rec = {"name": name, "share": 0.0, "tb": 0.0, "cf": 0.0, "cp": 0.0, "rf": 0.0}
+                            # любое исключение при парсинге -> полностью пропускаем компонент
+                            continue
                         if first == "mix_cold":
                             cold_mix.append(rec)
                         else:
@@ -1510,14 +1896,28 @@ class MainWindow(QMainWindow):
                 self.cold_mix.model.removeRows(0, self.cold_mix.model.rowCount())
             for r in cold_mix:
                 try:
-                    self.cold_mix.model.add_or_update(r.get("name", ""), float(r.get("share", 0.0) or 0.0), float(r.get("tb", 0.0) or 0.0), float(r.get("cf", 0.0) or 0.0), float(r.get("cp", 0.0) or 0.0), float(r.get("rf", 0.0) or 0.0))
+                    self.cold_mix.model.add_or_update(
+                        r.get("name", ""),
+                        float(r.get("share", 0.0) or 0.0),
+                        float(r.get("tb", 0.0) or 0.0),
+                        float(r.get("cf", 0.0) or 0.0),
+                        float(r.get("cp", 0.0) or 0.0),
+                        float(r.get("rf", 0.0) or 0.0),
+                    )
                 except Exception:
                     pass
             if self.hot_mix.model.rowCount() > 0:
                 self.hot_mix.model.removeRows(0, self.hot_mix.model.rowCount())
             for r in hot_mix:
                 try:
-                    self.hot_mix.model.add_or_update(r.get("name", ""), float(r.get("share", 0.0) or 0.0), float(r.get("tb", 0.0) or 0.0), float(r.get("cf", 0.0) or 0.0), float(r.get("cp", 0.0) or 0.0), float(r.get("rf", 0.0) or 0.0))
+                    self.hot_mix.model.add_or_update(
+                        r.get("name", ""),
+                        float(r.get("share", 0.0) or 0.0),
+                        float(r.get("tb", 0.0) or 0.0),
+                        float(r.get("cf", 0.0) or 0.0),
+                        float(r.get("cp", 0.0) or 0.0),
+                        float(r.get("rf", 0.0) or 0.0),
+                    )
                 except Exception:
                     pass
 
@@ -1547,6 +1947,12 @@ class MainWindow(QMainWindow):
                 self._suppress_full_calc_after_import = True
             except Exception:
                 pass
+            try:
+                self._post_import_changed = False
+                self.recalc_btn.hide()
+                self._lock_imported_fields()
+            except Exception:
+                pass
         except Exception as e:
             QMessageBox.warning(self, "Ошибка импорта", str(e))
         finally:
@@ -1569,10 +1975,16 @@ class MainWindow(QMainWindow):
 
             # require both streams to have t_in and t_out and m and valid mixes
             cold_ok = (
-                bool(cold.get("t_in")) and bool(cold.get("t_out")) and bool(cold.get("m")) and self._mix_valid(cold_mix)
+                bool(cold.get("t_in"))
+                and bool(cold.get("t_out"))
+                and bool(cold.get("m"))
+                and self._mix_valid(cold_mix)
             )
             hot_ok = (
-                bool(hot.get("t_in")) and bool(hot.get("t_out")) and bool(hot.get("m")) and self._mix_valid(hot_mix)
+                bool(hot.get("t_in"))
+                and bool(hot.get("t_out"))
+                and bool(hot.get("m"))
+                and self._mix_valid(hot_mix)
             )
             return cold_ok and hot_ok
         except Exception:
@@ -1707,11 +2119,19 @@ class MainWindow(QMainWindow):
                 if ans:
                     # safely extract numeric/string values from ans
                     try:
-                        sigma_val = float(ans.get("sigma", 0.0)) if ans.get("sigma") is not None else 0.0
+                        sigma_val = (
+                            float(ans.get("sigma", 0.0))
+                            if ans.get("sigma") is not None
+                            else 0.0
+                        )
                     except Exception:
                         sigma_val = 0.0
                     try:
-                        k_val = float(ans.get("k", 0.0)) if ans.get("k") is not None else 0.0
+                        k_val = (
+                            float(ans.get("k", 0.0))
+                            if ans.get("k") is not None
+                            else 0.0
+                        )
                     except Exception:
                         k_val = 0.0
                     if sigma_val:
@@ -1741,11 +2161,7 @@ class MainWindow(QMainWindow):
                     # Если σ посчитана, но K отсутствует, попробуем ещё раз выполнить расчёт (возможно
                     # теперь доступны дополнительные данные после записи t_out или q) и получить K.
                     try:
-                        if (
-                            ans
-                            and ("sigma" in ans)
-                            and (not ans.get("k"))
-                        ):
+                        if ans and ("sigma" in ans) and (not ans.get("k")):
                             # reload inputs (t_out/q might have been filled above)
                             cold2 = self.cold_panel.to_dict()
                             hot2 = self.hot_panel.to_dict()
@@ -1892,6 +2308,12 @@ class MainWindow(QMainWindow):
                     set_enabled(w, True)
                 except Exception:
                     pass
+            try:
+                self._post_import_changed = False
+                self._suppress_full_calc_after_import = False
+                self.recalc_btn.hide()
+            except Exception:
+                pass
 
             # clear mixtures
             try:
@@ -1899,6 +2321,33 @@ class MainWindow(QMainWindow):
                     self.cold_mix.model.removeRows(0, self.cold_mix.model.rowCount())
                 if self.hot_mix.model.rowCount() > 0:
                     self.hot_mix.model.removeRows(0, self.hot_mix.model.rowCount())
+                # сброс выбора компонента к первому (обычно "Азот")
+                try:
+                    self.cold_mix.comp.setCurrentIndex(0)
+                except Exception:
+                    pass
+                try:
+                    self.hot_mix.comp.setCurrentIndex(0)
+                except Exception:
+                    pass
+                # очистка поля ввода доли
+                try:
+                    self.cold_mix.share.clear()
+                except Exception:
+                    pass
+                try:
+                    self.hot_mix.share.clear()
+                except Exception:
+                    pass
+                # сброс отображения суммы
+                try:
+                    self.cold_mix.sum_field.setText("0.0")
+                except Exception:
+                    pass
+                try:
+                    self.hot_mix.sum_field.setText("0.0")
+                except Exception:
+                    pass
                 # update hints/export
                 try:
                     self.cold_mix.update_share_hint()
@@ -1944,6 +2393,210 @@ class MainWindow(QMainWindow):
                 self.status.showMessage("Сброшено")
             except Exception:
                 pass
+            # Сброс схемы к первой и запрет автосчёта sigma/k до явного вычисления
+            try:
+                self.hydro.rb_mix_mix.setChecked(True)
+            except Exception:
+                pass
+            try:
+                self._explicit_calc_done = False
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    # --- Диалоги помощи ---
+    def _simple_text_dialog(
+        self, title: str, text: str, read_only: bool = True
+    ) -> None:
+        try:
+            dlg = QDialog(self)
+            dlg.setWindowTitle(title)
+            dlg.resize(700, 500)
+            layout = QVBoxLayout(dlg)
+            te = QTextEdit()
+            te.setPlainText(text)
+            te.setReadOnly(read_only)
+            layout.addWidget(te)
+            buttons = QDialogButtonBox(QDialogButtonBox.Close)
+            buttons.rejected.connect(dlg.reject)
+            buttons.accepted.connect(dlg.accept)
+            layout.addWidget(buttons)
+            dlg.exec_()
+        except Exception as e:
+            QMessageBox.warning(self, title, str(e))
+
+    def show_help_dialog(self) -> None:
+        help_text = (
+            "Справка по использованию программы:\n\n"
+            "1. Введите параметры холодного и горячего потоков (температуры, расход, давление).\n"
+            "2. Сформируйте смеси компонентов: выберите компонент, долю и добавьте. Сумма долей каждой смеси должна быть 1.\n"
+            "3. Выберите гидродинамическую схему.\n"
+            "4. Введите либо тепловую нагрузку Q, либо выходную температуру горячего потока T⁺out — второе значение будет рассчитано автоматически.\n"
+            "5. Нажмите 'Вычислить' для получения σ и K.\n"
+            "6. Кнопка 'Провести анализ' позволяет открыть отдельное окно для изменения долей и построения графика зависимости Q–σ.\n"
+            "7. Используйте меню 'Файл' для импорта/экспорта данных в CSV или Excel. При импорте значения не преобразуются в даты.\n"
+            "8. 'Очистить параметры' сбрасывает все поля.\n"
+        )
+        self._simple_text_dialog("Справка", help_text)
+
+    def show_logs_dialog(self) -> None:
+        try:
+            if not LOG_FILE.exists():
+                QMessageBox.information(self, "Логи", "Файл логов пока отсутствует.")
+                return
+            with LOG_FILE.open("r", encoding="utf-8", errors="ignore") as f:
+                content = f.read()[-100000:]
+            self._simple_text_dialog("Логи", content)
+        except Exception as e:
+            QMessageBox.warning(self, "Логи", str(e))
+
+    def show_about_dialog(self) -> None:
+        try:
+            version_path = Path(os.path.dirname(os.path.abspath(__file__))) / "VERSION"
+            version = "неизвестно"
+            if version_path.exists():
+                try:
+                    version = version_path.read_text(encoding="utf-8").strip()
+                except Exception:
+                    pass
+            mtime = datetime.fromtimestamp(os.path.getmtime(__file__)).strftime(
+                "%Y-%m-%d %H:%M"
+            )
+            text = (
+                f"Полное наименование: Программа анализа двухпоточного теплообменника\n"
+                f"Версия: {version}\n"
+                f"Дата обновления: {mtime}\n\n"
+                "Описание: Инструмент для расчёта тепловой нагрузки,\n"
+                "производства энтропии и коэффициента теплопередачи\n"
+                "в системах теплообмена с различными гидродинамическими схемами."
+            )
+            QMessageBox.information(self, "О программе", text)
+        except Exception as e:
+            QMessageBox.warning(self, "О программе", str(e))
+
+    # --- Окно анализа ---
+    def open_analysis_window(self) -> None:
+        try:
+            from analysis_interface import AnalysisWindow  # type: ignore
+        except Exception as e:
+            QMessageBox.warning(
+                self, "Анализ", f"Не удалось импортировать окно анализа: {e}"
+            )
+            return
+        try:
+            cold = self.cold_panel.to_dict()
+            hot = self.hot_panel.to_dict()
+            cold_mix = self.cold_mix.mix_rows()
+            hot_mix = self.hot_mix.mix_rows()
+        except Exception:
+            cold = {}
+            hot = {}
+            cold_mix = []  # type: ignore
+            hot_mix = []  # type: ignore
+        # Проверим, что Q, sigma и k рассчитаны; если нет — не открываем окно анализа
+        try:
+            q_txt = self.out_panel.q.text().strip()
+            sigma_txt = self.out_panel.sigma.text().strip()
+            k_txt = self.out_panel.k.text().strip()
+
+            def _is_calculated(t: str) -> bool:
+                try:
+                    return float(t) != 0.0
+                except Exception:
+                    return False
+
+            if not q_txt or not _is_calculated(sigma_txt) or not _is_calculated(k_txt):
+                QMessageBox.warning(
+                    self,
+                    "Анализ",
+                    "Невозможно открыть анализ: сначала выполните полный расчёт (Q, σ и K должны быть рассчитаны).",
+                )
+                return
+        except Exception:
+            # в случае проблем с доступом к полям — не открываем анализ
+            QMessageBox.warning(
+                self, "Анализ", "Невозможно открыть анализ: недоступны значения Q/σ/K."
+            )
+            return
+        try:
+            self._analysis_win  # type: ignore[attr-defined]
+            if self._analysis_win is not None and self._analysis_win.isVisible():  # type: ignore
+                self._analysis_win.raise_()  # type: ignore
+                self._analysis_win.activateWindow()  # type: ignore
+                return
+        except Exception:
+            pass
+        try:
+            # приведение типов для mypy/pyright
+            from typing import cast as _cast, Dict as _Dict, Any as _Any, List as _List
+
+            cold_cast = {str(k): float(v) for k, v in cold.items()}  # type: ignore[arg-type]
+            hot_cast = {str(k): float(v) for k, v in hot.items()}  # type: ignore[arg-type]
+            cold_list = [dict(r) for r in cold_mix]  # type: ignore[list-item]
+            hot_list = [dict(r) for r in hot_mix]  # type: ignore[list-item]
+            cold_list = _cast(_List[_Dict[str, _Any]], cold_list)
+            hot_list = _cast(_List[_Dict[str, _Any]], hot_list)
+            self._analysis_win = AnalysisWindow(
+                cold_flow=cold_cast,
+                hot_flow=hot_cast,
+                cold_mix=cold_list,
+                hot_mix=hot_list,
+                parent=self,
+            )
+            self._analysis_win.show()
+        except Exception as e:
+            QMessageBox.warning(self, "Анализ", f"Ошибка открытия окна анализа: {e}")
+
+    # ---------- ПОМЕТКА УСТАРЕВАНИЯ РЕЗУЛЬТАТОВ ----------
+    def _mark_stale_results(self) -> None:
+        """Пометить, что результаты (σ, K, производные расчёты) устарели после изменения входных данных.
+        Кнопка 'Перерасчёт' отображается только если уже был выполнен явный расчёт.
+        """
+        try:
+            if getattr(self, "_explicit_calc_done", False):
+                self._results_stale = True
+                if self._mix_valid(self.cold_mix.mix_rows()) and self._mix_valid(
+                    self.hot_mix.mix_rows()
+                ):
+                    self.recalc_btn.show()
+        except Exception:
+            pass
+
+    def _on_recalc_clicked(self) -> None:
+        try:
+            self._suppress_full_calc_after_import = False
+            self._post_import_changed = False
+            self._results_stale = False
+        except Exception:
+            pass
+        try:
+            # Выполняем полный расчёт (как при кнопке Вычислить), но без скрытия кнопки до завершения
+            self.on_calc()
+        except Exception:
+            pass
+        try:
+            self.recalc_btn.hide()
+        except Exception:
+            pass
+
+    def _lock_imported_fields(self) -> None:
+        """Заблокировать поля, заполненные при импорте. Разблокировка при очистке."""
+        try:
+            widgets = [
+                self.cold_panel.t_in,
+                self.cold_panel.t_out,
+                self.cold_panel.m,
+                self.cold_panel.p,
+                self.hot_panel.t_in,
+                self.hot_panel.t_out,
+                self.hot_panel.m,
+                self.hot_panel.p,
+                self.out_panel.q,
+            ]
+            for w in widgets:
+                if w.text().strip():
+                    set_enabled(w, False)
         except Exception:
             pass
 
@@ -2018,16 +2671,18 @@ class MainWindow(QMainWindow):
                 cold_ready = (
                     cold["t_in"] and cold["t_out"] and cold["m"]
                 ) and self._mix_valid(cold_mix)
-                hot_ready = (hot["t_in"] and hot["t_out"] and hot["m"]) and self._mix_valid(
-                    hot_mix
-                )
+                hot_ready = (
+                    hot["t_in"] and hot["t_out"] and hot["m"]
+                ) and self._mix_valid(hot_mix)
                 if cold_ready or hot_ready:
                     self._auto_calc_minimal()
                     return
 
             # 2) If t_out_hot is empty but Q is given and hot stream data + mix are valid -> compute t_out_hot
             if not t_out_hot_text and q_text:
-                hot_ready_for_tout = (hot["t_in"] and hot["m"]) and self._mix_valid(hot_mix)
+                hot_ready_for_tout = (hot["t_in"] and hot["m"]) and self._mix_valid(
+                    hot_mix
+                )
                 if hot_ready_for_tout:
                     self._auto_calc_minimal()
                     return
