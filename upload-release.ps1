@@ -3,7 +3,7 @@ Param(
     [string]$Repo = "aspaProj",
     [string]$Tag = "v1.0",
     [string]$AssetPath = ".\dist\Teploobmen.exe",
-    [string]$Token = $env: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,
+    [string]$Token = $env:GITHUB_TOKEN,
     [switch]$Publish = $false   # если поставить --Publish, релиз будет опубликован сразу
 )
 
