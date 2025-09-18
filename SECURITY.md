@@ -4,7 +4,7 @@
 
 **Контакты для сообщений об уязвимостях**
 
-- Email: `security@gevorkyan424.dev`  
+- Email: `ruben.gevorkyan.99@mail.ru`  
 - (Опционально) Отправьте приватный issue с меткой `security` в этом репозитории.
 
 Если вы предпочитаете шифрование, используйте наш PGP-ключ (см. ниже).
@@ -31,7 +31,7 @@
 gpg --encrypt --recipient "REPLACE_WITH_KEY_ID" --armor report.txt > report.txt.asc
 ```
 
-Отправьте `report.txt.asc` на `security@gevorkyan424.dev`.
+Отправьте `report.txt.asc` на `ruben.gevorkyan.99@mail.ru`.
 
 **Область действия**
 
