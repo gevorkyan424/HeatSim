@@ -1024,12 +1024,16 @@ class MainWindow(QMainWindow):
             act_help = QAction("Справка", self)
             act_logs = QAction("Логи", self)
             act_about = QAction("О программе", self)
+            act_license = QAction("Лицензионное соглашение", self)
             help_menu.addAction(act_help)
             help_menu.addAction(act_logs)
             help_menu.addSeparator()
+            # Add license as a submenu item under Help
+            help_menu.addAction(act_license)
             help_menu.addAction(act_about)
             act_help.triggered.connect(self.show_help_dialog)
             act_logs.triggered.connect(self.show_logs_dialog)
+            act_license.triggered.connect(self.show_license_dialog)
             act_about.triggered.connect(self.show_about_dialog)
         except Exception as e:
             logger.exception("Ошибка создания меню: %s", e)
@@ -2474,6 +2478,21 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "О программе", text)
         except Exception as e:
             QMessageBox.warning(self, "О программе", str(e))
+
+    def show_license_dialog(self) -> None:
+        try:
+            lic_path = Path(os.path.dirname(os.path.abspath(__file__))) / "Лицензионное_соглашение.txt"
+            if not lic_path.exists():
+                QMessageBox.information(self, "Лицензионное соглашение", "Файл лицензионного соглашения не найден.")
+                return
+            try:
+                content = lic_path.read_text(encoding="utf-8")
+            except Exception as e:
+                QMessageBox.warning(self, "Лицензионное соглашение", f"Не удалось прочитать файл: {e}")
+                return
+            self._simple_text_dialog("Лицензионное соглашение", content)
+        except Exception as e:
+            QMessageBox.warning(self, "Лицензионное соглашение", str(e))
 
     # --- Окно анализа ---
     def open_analysis_window(self) -> None:
