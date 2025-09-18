@@ -1,0 +1,14 @@
+﻿section;t_in;t_out;m;p;;
+type;K;K;kg/s;kg/m^2;;
+flow_cold;300.0;380.0;0.2;01.авг;;
+flow_hot;400.0;;0.4;01.сен;;
+;;;;;;
+section;name;share;tb;cf;cp;rf
+type;str;fraction;K;kJ/kg*K;kJ/kg*K;kJ/kg
+mix_cold;Бензол;0.6;353.25;янв.74;янв.13;393.0
+mix_cold;Толуол;0.4;383.75;01.июл;янв.13;351.0
+mix_hot;Вода;0.5;373.0;04.фев;2.0;2260.0
+mix_hot;Спирт;0.5;351.52;фев.44;янв.43;841.0
+;;;;;;
+meta;schema;Schema1;;;;
+meta;q;;;;;
