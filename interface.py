@@ -2481,14 +2481,23 @@ class MainWindow(QMainWindow):
 
     def show_license_dialog(self) -> None:
         try:
-            lic_path = Path(os.path.dirname(os.path.abspath(__file__))) / "Лицензионное_соглашение.txt"
+            lic_path = (
+                Path(os.path.dirname(os.path.abspath(__file__)))
+                / "Лицензионное_соглашение.txt"
+            )
             if not lic_path.exists():
-                QMessageBox.information(self, "Лицензионное соглашение", "Файл лицензионного соглашения не найден.")
+                QMessageBox.information(
+                    self,
+                    "Лицензионное соглашение",
+                    "Файл лицензионного соглашения не найден.",
+                )
                 return
             try:
                 content = lic_path.read_text(encoding="utf-8")
             except Exception as e:
-                QMessageBox.warning(self, "Лицензионное соглашение", f"Не удалось прочитать файл: {e}")
+                QMessageBox.warning(
+                    self, "Лицензионное соглашение", f"Не удалось прочитать файл: {e}"
+                )
                 return
             self._simple_text_dialog("Лицензионное соглашение", content)
         except Exception as e:

@@ -1,3 +1,38 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+*.egg
+
+# VS Code
+.vscode/
+
+# PyInstaller
+*.spec
+
+# Environments
+.env
+.venv
+venv/
+ENV/
+
+# Logs
+*.log
+
+# OS
+Thumbs.db
+.DS_Store
+
+# OneDrive/temp files
+~$*
+
+# IDE / editors
+.idea/
 # Virtual environment
 .venv/
 env/
