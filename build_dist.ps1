@@ -31,15 +31,15 @@ $add2 = "${dataPath};data"
 # include icon if present
 $iconPath = Join-Path $Here "assets\icon.ico"
 $iconArg = ""
-if (Test-Path $iconPath) { Write-Host "Found icon: $iconPath"; python -m PyInstaller --noconfirm --onedir --windowed --name aspaProj --add-data "$add1" --add-data "$add2" --icon "$iconPath" main.py }
-else { python -m PyInstaller --noconfirm --onedir --windowed --name aspaProj --add-data "$add1" --add-data "$add2" main.py }
+if (Test-Path $iconPath) { Write-Host "Found icon: $iconPath"; python -m PyInstaller --noconfirm --onedir --windowed --name HeatSim --add-data "$add1" --add-data "$add2" --icon "$iconPath" main.py }
+else { python -m PyInstaller --noconfirm --onedir --windowed --name HeatSim --add-data "$add1" --add-data "$add2" main.py }
 
 if ($LASTEXITCODE -ne 0) {
     Write-Host "PyInstaller failed with exit code $LASTEXITCODE" -ForegroundColor Red
     exit $LASTEXITCODE
 }
 
-$distFolder = Join-Path $Here "dist\aspaProj"
+$distFolder = Join-Path $Here "dist\HeatSim"
 if (-Not (Test-Path $distFolder)) {
     Write-Host "Expected dist folder not found: $distFolder" -ForegroundColor Red
     exit 1
@@ -49,10 +49,10 @@ Write-Host "Adding recipient instructions file..."
 Copy-Item -Path .\RUN_FOR_RECIPIENT.txt -Destination $distFolder -Force
 
 Write-Host "Creating a shortcut inside distribution folder..."
-# Create a .lnk shortcut pointing to aspaProj.exe (for convenience)
+# Create a .lnk shortcut pointing to HeatSim.exe (for convenience)
 $WshShell = New-Object -ComObject WScript.Shell
-$shortcutPath = Join-Path $distFolder "ASPAProj - Ярлык.lnk"
-$targetPath = Join-Path $distFolder "aspaProj.exe"
+$shortcutPath = Join-Path $distFolder "HeatSim - Ярлык.lnk"
+$targetPath = Join-Path $distFolder "HeatSim.exe"
 try {
     $shortcut = $WshShell.CreateShortcut($shortcutPath)
     $shortcut.TargetPath = $targetPath
@@ -66,7 +66,7 @@ catch {
 }
 
 Write-Host "Creating ZIP archive for distribution..."
-$zipPath = Join-Path $Here "aspaProj-distribution.zip"
+$zipPath = Join-Path $Here "HeatSim-distribution.zip"
 if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
 Compress-Archive -Path $distFolder\* -DestinationPath $zipPath
 

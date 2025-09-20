@@ -21,44 +21,12 @@ dist/
 venv/
 ENV/
 
-# Logs
-*.log
-
 # OS
 Thumbs.db
 .DS_Store
 
+# Distribution zip
+HeatSim-distribution.zip
+
 # OneDrive/temp files
 ~$*
-
-# IDE / editors
-.idea/
-# Virtual environment
-.venv/
-env/
-venv/
-
-# Python bytecode
-__pycache__/
-*.py[cod]
-
-# Distribution / packaging
-dist/
-build/
-*.egg-info/
-*.spec
-
-# Executables and archives
-*.zip
-*.exe
-
-# Editor and OS files
-.vscode/
-.vscode/.history/
-.DS_Store
-Thumbs.db
-
-# Misc
-aspaProj-distribution.zip
-_test_unpack/
-releases/

@@ -1,6 +1,6 @@
 Param(
     [string]$Owner = "gevorkyan424",
-    [string]$Repo = "aspaProj",
+    [string]$Repo = "HeatSim",
     [string]$Tag = "v1.0",
     [string]$AssetPath = ".\dist\Teploobmen.exe",
     [string]$Token = $env:GITHUB_TOKEN,
@@ -25,7 +25,7 @@ $Token = $Token.Trim()
 
 # Basic headers
 $apiBase = "https://api.github.com/repos/$Owner/$Repo/releases"
-$headers = @{ Authorization = "token $Token"; Accept = "application/vnd.github.v3+json"; 'User-Agent' = 'aspaProj-uploader' }
+$headers = @{ Authorization = "token $Token"; Accept = "application/vnd.github.v3+json"; 'User-Agent' = 'HeatSim-uploader' }
 
 # 1) Try to find existing release by tag
 try {
@@ -89,7 +89,7 @@ if ($existing) {
 $uploadUri = "$upload_url?name=$assetName"
 Write-Host "Uploading $AssetPath to $uploadUri ..."
 try {
-    Invoke-RestMethod -Method Post -Uri $uploadUri -Headers @{ Authorization = "token $token"; 'Content-Type' = 'application/octet-stream'; 'User-Agent' = 'aspaProj-uploader' } -InFile $AssetPath -ErrorAction Stop
+    Invoke-RestMethod -Method Post -Uri $uploadUri -Headers @{ Authorization = "token $token"; 'Content-Type' = 'application/octet-stream'; 'User-Agent' = 'HeatSim-uploader' } -InFile $AssetPath -ErrorAction Stop
     Write-Host "Upload complete."
 }
 catch {

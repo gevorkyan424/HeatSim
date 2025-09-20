@@ -8,8 +8,8 @@ $items = @()
 $excludeVenv = Join-Path (Get-Location) ".venv"
 
 if (Test-Path .\_test_unpack) { $items += Get-ChildItem .\_test_unpack -Recurse -Force }
-if (Test-Path .\aspaProj-distribution.zip) { $items += Get-Item .\aspaProj-distribution.zip }
-if (Test-Path .\aspaProj.spec) { $items += Get-Item .\aspaProj.spec }
+if (Test-Path .\HeatSim-distribution.zip) { $items += Get-Item .\HeatSim-distribution.zip }
+if (Test-Path .\HeatSim.spec) { $items += Get-Item .\HeatSim.spec }
 if (Test-Path .\build) { $items += Get-ChildItem .\build -Recurse -Force }
 
 # Collect __pycache__ directories and .pyc files but explicitly exclude any under .venv

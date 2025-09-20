@@ -38,7 +38,7 @@ $add1 = "${assets};assets"
 $add2 = "${data};data"
 
 Write-Host "Running PyInstaller via module to avoid PATH issues..."
-$pyargs = @("--noconfirm", "--onefile", "--windowed", "--name", "aspaProj", "--add-data", $add1, "--add-data", $add2)
+$pyargs = @("--noconfirm", "--onefile", "--windowed", "--name", "HeatSim", "--add-data", $add1, "--add-data", $add2)
 # include icon if present
 $iconPath = Join-Path $Here "assets\icon.ico"
 if (Test-Path $iconPath) { $pyargs += @("--icon", $iconPath) }
@@ -49,7 +49,7 @@ if ($LASTEXITCODE -eq 0) {
     Write-Host "Build succeeded. See the executable in the 'dist' folder." -ForegroundColor Green
 
     # Path to produced exe
-    $exePath = Join-Path $Here "dist\aspaProj.exe"
+    $exePath = Join-Path $Here "dist\HeatSim.exe"
 
     # Copy LICENSE and EULA into dist for distribution
     $filesToCopy = @("LICENSE", "EULA.txt")

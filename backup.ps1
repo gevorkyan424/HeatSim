@@ -118,4 +118,4 @@ if ($backups.Count -gt $Keep) {
 }
 
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\backup.ps1
-Get-Content ..\aspaProj_backups\backup_history.log -Tail 3
+Get-Content ..\HeatSim_backups\backup_history.log -Tail 3

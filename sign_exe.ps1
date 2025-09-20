@@ -4,10 +4,10 @@ Param(
     [string]$TimestampUrl = "http://timestamp.digicert.com"
 )
 
-Write-Host "This script signs 'dist\aspaProj\aspaProj.exe' using signtool."
+Write-Host "This script signs 'dist\HeatSim\HeatSim.exe' using signtool."
 Write-Host "It is a template — run it on a machine with signtool (Windows SDK) installed."
 
-$exePath = Join-Path $PSScriptRoot "dist\aspaProj\aspaProj.exe"
+$exePath = Join-Path $PSScriptRoot "dist\HeatSim\HeatSim.exe"
 if (-Not (Test-Path $exePath)) { Write-Host "Executable not found: $exePath" -ForegroundColor Red; exit 1 }
 if (-Not (Test-Path $PfxPath)) { Write-Host "PFX not found: $PfxPath" -ForegroundColor Red; exit 1 }
 
