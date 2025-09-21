@@ -13,7 +13,7 @@ dist/
 .vscode/
 
 # PyInstaller
-*.spec
+# (спецификации теперь трекаются в репозитории)
 
 # Environments
 .env
