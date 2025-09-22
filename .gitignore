@@ -30,3 +30,5 @@ HeatSim-distribution.zip
 
 # OneDrive/temp files
 ~$*
+
+# Local virtual env\n.venv/
