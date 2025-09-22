@@ -49,8 +49,14 @@ class AnalysisWindow(QDialog):
         self.resize(1400, 900)
         self.setSizeGripEnabled(True)
 
+        # keep copies of the original mixes (from main window) and working copies
+        self._base_cold_mix = [dict(r) for r in cold_mix]
+        self._base_hot_mix = [dict(r) for r in hot_mix]
         self._cold_mix = [dict(r) for r in cold_mix]
         self._hot_mix = [dict(r) for r in hot_mix]
+        # store original flow states (from main window)
+        self._base_cold_flow = dict(cold_flow)
+        self._base_hot_flow = dict(hot_flow)
         layout = QVBoxLayout(self)
 
         # Tables with per-table controls (верх)
@@ -254,25 +260,88 @@ class AnalysisWindow(QDialog):
         if not (self._cold_locked and self._hot_locked):
             QMessageBox.information(self, "Анализ", "Сначала утвердите обе таблицы.")
             return
+        # read approved tables (analysis window values)
         self._read_tables()
-        # Prepare scenarios for each component in both mixes
-        scenarios = self._build_scenarios()
         import logic
 
-        cold_flow = {"t_in": 0.0, "t_out": 0.0, "m": 0.0, "p": 0.0}
-        hot_flow = {"t_in": 0.0, "t_out": 0.0, "m": 0.0, "p": 0.0}
         series_q: Dict[str, List[float]] = {}
         series_sigma: Dict[str, List[float]] = {}
         series_k: Dict[str, List[float]] = {}
         series_x: Dict[str, List[float]] = {}
-        for label, (shares, cold_mix_var, hot_mix_var) in scenarios.items():
+
+        def gen_axis(start: float, end: float, step_abs: float = 0.1) -> List[float]:
+            # generate list of values from start to end with steps of magnitude step_abs
+            if abs(end - start) < 1e-9:
+                return [round(start, 6)]
+            vals: List[float] = []
+            sgn = 1 if end > start else -1
+            step = sgn * abs(step_abs)
+            v = start
+            vals.append(round(v, 6))
+            # step until we pass end
+            while True:
+                v_next = v + step
+                if (sgn > 0 and v_next < end - 1e-9) or (
+                    sgn < 0 and v_next > end + 1e-9
+                ):
+                    vals.append(round(v_next, 6))
+                    v = v_next
+                    continue
+                break
+            if abs(vals[-1] - end) > 1e-9:
+                vals.append(round(end, 6))
+            # clamp to [0,1]
+            vals = [min(max(0.0, float(x)), 1.0) for x in vals]
+            return vals
+
+        # helper to build mix variant when varying index idx in base_mix to value val
+        def build_variant(
+            base_mix: List[Dict[str, Any]], idx: int, val: float
+        ) -> List[Dict[str, Any]]:
+            others = [j for j in range(len(base_mix)) if j != idx]
+            if others:
+                rest = (1.0 - val) / len(others)
+            else:
+                rest = 0.0
+            new_mix: List[Dict[str, Any]] = []
+            for j, comp in enumerate(base_mix):
+                if j == idx:
+                    new_mix.append({**comp, "share": float(val)})
+                else:
+                    new_mix.append({**comp, "share": float(rest)})
+            return new_mix
+
+        # For cold components: vary from main-window base to approved value; hot mix kept as approved
+        for i, comp in enumerate(self._cold_mix):
+            name = comp.get("name", f"c{i}")
+            # find original share from base mix by name (fallback to index)
+            orig_share = 0.0
+            try:
+                orig_share = float(
+                    next(
+                        (
+                            c.get("share", 0.0)
+                            for c in self._base_cold_mix
+                            if c.get("name") == name
+                        ),
+                        self._base_cold_mix[i].get("share", 0.0),
+                    )
+                )
+            except Exception:
+                orig_share = float(self._base_cold_mix[i].get("share", 0.0))
+            approved_share = float(comp.get("share", 0.0))
+            if abs(approved_share - orig_share) < 1e-9:
+                continue
+            axis = gen_axis(orig_share, approved_share, 0.1)
             q_vals: List[float] = []
             sigma_vals: List[float] = []
             k_vals: List[float] = []
-            for mix_c, mix_h in zip(cold_mix_var, hot_mix_var):
+            for v in axis:
+                mix_c = build_variant(self._base_cold_mix, i, v)
+                mix_h = [dict(r) for r in self._hot_mix]
                 ans = logic.calculate(
-                    cold=cold_flow,
-                    hot=hot_flow,
+                    cold=self._base_cold_flow,
+                    hot=self._base_hot_flow,
                     cold_mix=mix_c,
                     hot_mix=mix_h,
                     q=0.0,
@@ -281,10 +350,56 @@ class AnalysisWindow(QDialog):
                 q_vals.append(float(ans.get("q", 0.0)))
                 sigma_vals.append(float(ans.get("sigma", 0.0)))
                 k_vals.append(float(ans.get("k", 0.0)))
-            series_x[label] = shares
+            label = f"C:{name}"
+            series_x[label] = axis
             series_q[label] = q_vals
             series_sigma[label] = sigma_vals
             series_k[label] = k_vals
+
+        # For hot components: vary from main-window base to approved value; cold mix kept as approved
+        for i, comp in enumerate(self._hot_mix):
+            name = comp.get("name", f"h{i}")
+            try:
+                orig_share = float(
+                    next(
+                        (
+                            c.get("share", 0.0)
+                            for c in self._base_hot_mix
+                            if c.get("name") == name
+                        ),
+                        self._base_hot_mix[i].get("share", 0.0),
+                    )
+                )
+            except Exception:
+                orig_share = float(self._base_hot_mix[i].get("share", 0.0))
+            approved_share = float(comp.get("share", 0.0))
+            if abs(approved_share - orig_share) < 1e-9:
+                continue
+            axis = gen_axis(orig_share, approved_share, 0.1)
+            q_vals: List[float] = []
+            sigma_vals: List[float] = []
+            k_vals: List[float] = []
+            for v in axis:
+                mix_h = build_variant(self._base_hot_mix, i, v)
+                mix_c = [dict(r) for r in self._cold_mix]
+                ans = logic.calculate(
+                    cold=self._base_cold_flow,
+                    hot=self._base_hot_flow,
+                    cold_mix=mix_c,
+                    hot_mix=mix_h,
+                    q=0.0,
+                    schema="Schema1",
+                )
+                q_vals.append(float(ans.get("q", 0.0)))
+                sigma_vals.append(float(ans.get("sigma", 0.0)))
+                k_vals.append(float(ans.get("k", 0.0)))
+            label = f"H:{name}"
+            series_x[label] = axis
+            series_q[label] = q_vals
+            series_sigma[label] = sigma_vals
+            series_k[label] = k_vals
+
+        # Update plot
         self._update_plot(series_x, series_q, series_sigma, series_k)
         self.run_btn.hide()
 
@@ -366,6 +481,7 @@ class AnalysisWindow(QDialog):
         def plot_series(
             ax: Axes, data_dict: Dict[str, List[float]], y_label: str
         ) -> None:
+            total = len(data_dict)
             for idx, (label, xs) in enumerate(data_dict.items()):
                 color = color_cycle[idx % len(color_cycle)]
                 ys = None
@@ -376,8 +492,15 @@ class AnalysisWindow(QDialog):
                 else:
                     ys = series_k.get(label, [])
                 if xs and ys:
+                    # apply tiny horizontal offset per series to avoid exact overlap of markers
+                    try:
+                        jitter = 0.001
+                        offset = (idx - (total - 1) / 2.0) * jitter
+                        xs_plot = [min(max(0.0, float(x) + offset), 1.0) for x in xs]
+                    except Exception:
+                        xs_plot = xs
                     ax.plot(
-                        xs,
+                        xs_plot,
                         ys,
                         marker="o",
                         linestyle="-",
