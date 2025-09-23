@@ -86,10 +86,10 @@ if ($existing) {
 }
 
 # 3) Upload new asset
-$uploadUri = "$upload_url?name=$assetName"
+$uploadUri = "${upload_url}?name=${assetName}"
 Write-Host "Uploading $AssetPath to $uploadUri ..."
 try {
-    Invoke-RestMethod -Method Post -Uri $uploadUri -Headers @{ Authorization = "token $token"; 'Content-Type' = 'application/octet-stream'; 'User-Agent' = 'HeatSim-uploader' } -InFile $AssetPath -ErrorAction Stop
+    Invoke-RestMethod -Method Post -Uri $uploadUri -Headers @{ Authorization = "token $Token"; 'Content-Type' = 'application/octet-stream'; 'User-Agent' = 'HeatSim-uploader' } -InFile $AssetPath -ErrorAction Stop
     Write-Host "Upload complete."
 }
 catch {
