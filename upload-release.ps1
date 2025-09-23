@@ -2,7 +2,7 @@ Param(
     [string]$Owner = "gevorkyan424",
     [string]$Repo = "HeatSim",
     [string]$Tag = "v1.0",
-    [string]$AssetPath = ".\dist\Teploobmen.exe",
+    [string]$AssetPath = ".\dist\HeatSim.exe",
     [string]$Token = $env:GITHUB_TOKEN,
     [switch]$Publish = $false   # если поставить --Publish, релиз будет опубликован сразу
 )
