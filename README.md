@@ -191,6 +191,26 @@ python -m pip install PyQt5
 - добавить `.gitignore` (с исключением `.venv`) и закоммитить изменения, или
 - настроить `launch.json`/`settings.json` для VS Code, чтобы проект использовал `.venv` автоматически.
 
+## Выпуск и релизы
+
+- Ручной релиз: используйте `upload-release.ps1`:
+```powershell
+.\build_exe.ps1
+.\upload-release.ps1 -Tag "v1.1" -Publish
+```
+Скрипт запросит GitHub PAT, если не задан `GITHUB_TOKEN`. Ассет — `dist\HeatSim.exe`.
+
+- Автосборка по тэгу: создан workflow `.github/workflows/release.yml`. При пуше тега вида `v*` CI собирает exe и публикует релиз с ассетом.
+
+## Подпись исполняемого файла
+
+Подготовьте PFX с код‑подписью и установите Windows SDK (`signtool.exe`). Затем:
+```powershell
+$pwd = Read-Host -AsSecureString "PFX password"
+.\sign_exe.ps1 -PfxPath 'C:\path\to\yourcert.pfx' -PfxPassword $pwd
+```
+Если `signtool.exe` не в PATH, откройте скрипт и пропишите полный путь.
+
 ---
 
 Если нужно, допишу README на английском или добавлю пример CSV для импорта/экспорта смесей. Скажите, какие ещё разделы добавить.
