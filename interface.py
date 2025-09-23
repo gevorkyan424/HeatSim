@@ -4,7 +4,7 @@ import csv
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, TypedDict, Any, List, Dict, Optional, Sequence, cast
+from typing import Callable, TypedDict, Any, List, Dict, Optional, Sequence, cast, Tuple
 
 from PyQt5.QtGui import (
     QFont,
@@ -69,7 +69,7 @@ except Exception:
     # Workbook will be created via openpyxl.Workbook() when module is present
 
 # ===================== БАЗА СВОЙСТВ КОМПОНЕНТОВ =====================
-COMPONENT_DB = {
+COMPONENT_DB: Dict[str, Tuple[float, float, float, float]] = {
     "Вода": (373.0, 4.2, 2.0, 2260.0),
     "Ртуть": (629.9, 0.14, 0.146, 294.0),
     "Этанол": (351.5, 2.44, 1.42, 846.0),
@@ -106,7 +106,301 @@ COMPONENT_DB = {
     "Бензол": (353.25, 1.74, 1.13, 393.0),
     "Толуол": (383.75, 1.70, 1.13, 351.0),
     "Спирт": (351.52, 2.44, 1.43, 841.0),
+    # --- Дополнения ---
+    "Метанол": (337.85, 2.51, 1.95, 1100.0),
+    "Изопропанол": (355.5, 2.68, 1.75, 667.0),
+    "Ацетон": (329.45, 2.20, 1.58, 518.0),
+    "Циклогексан": (353.87, 1.86, 1.12, 350.0),
+    "Гексан (n-Hexane)": (341.88, 2.26, 1.67, 334.0),
+    "Гептан (n-Heptane)": (371.58, 2.26, 1.66, 316.0),
+    "Октан (n-Octane)": (398.83, 2.22, 1.64, 308.0),
+    "Пентан (n-Pentane)": (309.21, 2.26, 1.69, 360.0),
+    "Изобутан": (261.0, 2.28, 1.67, 366.0),
+    "Пропилен (Пропен)": (225.5, 2.40, 1.68, 363.0),
+    "Метан": (111.65, 3.50, 2.20, 510.0),
+    "Этан": (184.55, 2.40, 1.74, 488.0),
+    "Этен (Этилен)": (169.45, 2.35, 1.62, 430.0),
+    "Кислород": (90.19, 1.70, 0.92, 213.0),
+    "Аргон": (87.30, 1.30, 0.52, 161.0),
+    "Этиленгликоль": (470.35, 2.42, 1.63, 800.0),
+    "Пропиленгликоль": (460.35, 2.50, 1.60, 700.0),
+    "R134a (1,1,1,2-ТФЭ)": (247.08, 1.42, 0.88, 216.0),
+    "R32 (дифторметан)": (221.40, 1.77, 0.87, 238.0),
+    "R22 (хлордифторметан)": (232.35, 1.31, 0.68, 233.0),
 }
+
+# ---- Импорт/экспорт базы компонентов ----
+DATA_DIR = Path(os.path.dirname(os.path.abspath(__file__))) / "data"
+
+def _parse_float_cell(val: Optional[str]) -> Optional[float]:
+    if val is None:
+        return None
+    s = str(val).strip()
+    if not s:
+        return None
+    try:
+        return float(s.replace(",", "."))
+    except Exception:
+        return None
+
+def load_component_db_from_xlsx(path: os.PathLike[str] | str, merge: bool = True) -> Dict[str, int]:
+    """Load component properties from an Excel .xlsx file.
+
+    Expected header names are the same as CSV loader (Russian/English variants):
+    имя|name, Tb_K|Tb, Cf_kJ_per_kgK|C_f|Cf, Cp_kJ_per_kgK|C_p|Cp, rf_kJ_per_kg|r_f|rf
+    Only numeric columns are used; any extra columns (e.g., source_url) are ignored.
+    """
+    if openpyxl is None:
+        raise RuntimeError("Для импорта из Excel требуется пакет openpyxl.")
+    stats = {"updated": 0, "added": 0, "skipped": 0}
+    try:
+        wb = openpyxl.load_workbook(path, data_only=True)
+        # use sheet named 'components' if exists, else first sheet
+        ws = None
+        if "components" in wb.sheetnames:
+            ws = wb["components"]
+        else:
+            ws = wb[wb.sheetnames[0]]
+        rows = list(ws.values)
+        if not rows:
+            return stats
+        # header row
+        header = [str(h or "").strip() for h in rows[0]]
+        def hfind(*options: str) -> Optional[int]:
+            low = [h.lower() for h in header]
+            for o in options:
+                if o.lower() in low:
+                    return low.index(o.lower())
+            return None
+        i_name = hfind("имя", "name")
+        i_tb = hfind("tb_k", "tb")
+        i_cf = hfind("cf_kj_per_kgk", "c_f", "cf")
+        i_cp = hfind("cp_kj_per_kgk", "c_p", "cp")
+        i_rf = hfind("rf_kj_per_kg", "r_f", "rf")
+        if i_name is None:
+            raise ValueError("В Excel отсутствует столбец 'имя'/'name'.")
+        for r in rows[1:]:
+            try:
+                name = str(r[i_name] or "").strip() if i_name < len(r) else ""
+                if not name:
+                    stats["skipped"] += 1
+                    continue
+                def getf(idx: Optional[int]) -> Optional[float]:
+                    if idx is None or idx >= len(r):
+                        return None
+                    v = r[idx]
+                    if v is None or v == "":
+                        return None
+                    try:
+                        return float(str(v).replace(",", "."))
+                    except Exception:
+                        return None
+                tb = getf(i_tb)
+                cf = getf(i_cf)
+                cp = getf(i_cp)
+                rf = getf(i_rf)
+                has_any = any(v is not None for v in (tb, cf, cp, rf))
+                all_present = all(v is not None for v in (tb, cf, cp, rf))
+                if not has_any:
+                    stats["skipped"] += 1
+                    continue
+                if name in COMPONENT_DB:
+                    old_tb, old_cf, old_cp, old_rf = COMPONENT_DB[name]
+                    if merge:
+                        new_val = (
+                            tb if tb is not None else old_tb,
+                            cf if cf is not None else old_cf,
+                            cp if cp is not None else old_cp,
+                            rf if rf is not None else old_rf,
+                        )
+                        if new_val != COMPONENT_DB[name]:
+                            COMPONENT_DB[name] = new_val
+                            stats["updated"] += 1
+                        else:
+                            stats["skipped"] += 1
+                    else:
+                        if all_present:
+                            COMPONENT_DB[name] = (tb, cf, cp, rf)  # type: ignore[arg-type]
+                            stats["updated"] += 1
+                        else:
+                            stats["skipped"] += 1
+                else:
+                    if all_present:
+                        COMPONENT_DB[name] = (tb, cf, cp, rf)  # type: ignore[arg-type]
+                        stats["added"] += 1
+                    else:
+                        stats["skipped"] += 1
+            except Exception:
+                stats["skipped"] += 1
+                continue
+    except Exception as e:
+        logger.exception("Ошибка импорта базы компонентов из Excel: %s", e)
+        raise
+    return stats
+def load_component_db_from_csv(path: os.PathLike[str] | str, merge: bool = True) -> Dict[str, int]:
+    """Load component properties from CSV.
+
+    Expected columns (case-insensitive, Russian/English supported):
+    - имя | name
+    - Tb_K | Tb
+    - Cf_kJ_per_kgK | C_f
+    - Cp_kJ_per_kgK | C_p
+    - rf_kJ_per_kg | r_f
+
+    Behavior:
+    - merge=True: for existing components update only provided fields; for new components add only if all 4 fields are present.
+    - merge=False: replace existing entries entirely when all 4 fields present.
+
+    Returns stats dict: {"updated": x, "added": y, "skipped": z}.
+    """
+    stats = {"updated": 0, "added": 0, "skipped": 0}
+    try:
+        with open(path, "r", encoding="utf-8-sig", newline="") as f:
+            sample = f.read(4096)
+            f.seek(0)
+            try:
+                dialect = csv.Sniffer().sniff(sample)
+            except Exception:
+                # часто используется ';' в проекте
+                dialect = csv.excel
+                dialect.delimiter = ";"  # type: ignore[attr-defined]
+            rdr = csv.DictReader(f, dialect=dialect)
+            # нормализуем заголовки
+            headers = { (h or "").strip().lower(): h for h in (rdr.fieldnames or []) }
+            def hkey(*options: str) -> Optional[str]:
+                for o in options:
+                    if o.lower() in headers:
+                        return headers[o.lower()]
+                return None
+
+            col_name = hkey("имя", "name")
+            col_tb = hkey("tb_k", "tb")
+            col_cf = hkey("cf_kj_per_kgk", "c_f", "cf")
+            col_cp = hkey("cp_kj_per_kgk", "c_p", "cp")
+            col_rf = hkey("rf_kj_per_kg", "r_f", "rf")
+
+            if not col_name:
+                raise ValueError("В CSV отсутствует столбец 'имя'/'name'.")
+
+            for row in rdr:
+                name = (row.get(col_name) or "").strip()
+                if not name:
+                    stats["skipped"] += 1
+                    continue
+                tb = _parse_float_cell(row.get(col_tb)) if col_tb else None
+                cf = _parse_float_cell(row.get(col_cf)) if col_cf else None
+                cp = _parse_float_cell(row.get(col_cp)) if col_cp else None
+                rf = _parse_float_cell(row.get(col_rf)) if col_rf else None
+
+                has_any = any(v is not None for v in (tb, cf, cp, rf))
+                all_present = all(v is not None for v in (tb, cf, cp, rf))
+                if not has_any:
+                    stats["skipped"] += 1
+                    continue
+
+                if name in COMPONENT_DB:
+                    old_tb, old_cf, old_cp, old_rf = COMPONENT_DB[name]
+                    if merge:
+                        new_val = (
+                            tb if tb is not None else old_tb,
+                            cf if cf is not None else old_cf,
+                            cp if cp is not None else old_cp,
+                            rf if rf is not None else old_rf,
+                        )
+                        if new_val != COMPONENT_DB[name]:
+                            COMPONENT_DB[name] = new_val
+                            stats["updated"] += 1
+                        else:
+                            stats["skipped"] += 1
+                    else:
+                        if all_present:
+                            COMPONENT_DB[name] = (tb, cf, cp, rf)  # type: ignore[arg-type]
+                            stats["updated"] += 1
+                        else:
+                            stats["skipped"] += 1
+                else:
+                    if all_present:
+                        COMPONENT_DB[name] = (tb, cf, cp, rf)  # type: ignore[arg-type]
+                        stats["added"] += 1
+                    else:
+                        stats["skipped"] += 1
+    except FileNotFoundError:
+        raise
+    except Exception as e:
+        logger.exception("Ошибка импорта базы компонентов: %s", e)
+        raise
+    return stats
+
+# CSV-экспорт базы компонентов удалён по требованию; используйте Excel-экспорт.
+
+def export_component_db_to_xlsx(path: os.PathLike[str] | str) -> None:
+    """Export current COMPONENT_DB to an Excel .xlsx workbook.
+
+    Sheet name: components
+    Columns: имя, Tb_K, Cf_kJ_per_kgK, Cp_kJ_per_kgK, rf_kJ_per_kg, source_url
+    """
+    if openpyxl is None:
+        raise RuntimeError("Для экспорта в Excel требуется пакет openpyxl.")
+
+    # Build URL map from existing CSV mapping if present
+    url_map: Dict[str, str] = {}
+    nist_csv = DATA_DIR / "components_nist_results.csv"
+    try:
+        if nist_csv.exists():
+            with open(nist_csv, "r", encoding="utf-8-sig", newline="") as f:
+                rdr = csv.DictReader(f)
+                name_col = None
+                url_col = None
+                if rdr.fieldnames:
+                    fl = [h.strip().lower() for h in rdr.fieldnames]
+                    for i, h in enumerate(fl):
+                        if h in ("имя", "name"):
+                            name_col = rdr.fieldnames[i]
+                        if h in ("source_url", "url"):
+                            url_col = rdr.fieldnames[i]
+                for row in rdr:
+                    nm = (row.get(name_col or "") or "").strip()
+                    url = (row.get(url_col or "") or "").strip()
+                    if nm and url:
+                        url_map[nm] = url
+    except Exception:
+        pass
+
+    assert openpyxl is not None
+    wb = openpyxl.Workbook()
+    ws = cast(Any, wb.active)
+    ws.title = "components"
+    ws.append(["имя", "Tb_K", "Cf_kJ_per_kgK", "Cp_kJ_per_kgK", "rf_kJ_per_kg", "source_url"])
+    for name in sorted(COMPONENT_DB.keys()):
+        tb, cf, cp, rf = COMPONENT_DB[name]
+        url = url_map.get(name, "")
+        ws.append([name, tb, cf, cp, rf, url])
+    wb.save(path)
+
+def _auto_load_components_db() -> Optional[Dict[str, int]]:
+    """Auto-load DB from known CSV if present. Returns stats or None."""
+    candidates = [
+        DATA_DIR / "components.xlsx",
+        DATA_DIR / "components.csv",
+        DATA_DIR / "components_nist_results.csv",
+    ]
+    for p in candidates:
+        try:
+            if p.exists():
+                if p.suffix.lower() == ".xlsx":
+                    return load_component_db_from_xlsx(p, merge=True)
+                else:
+                    return load_component_db_from_csv(p, merge=True)
+        except Exception:
+            # не критично для старта приложения
+            return None
+    return None
+
+# Выполним авто-загрузку на старте (не критично при ошибке)
+try:
+    _ = _auto_load_components_db()
+except Exception:
+    pass
 
 
 # ===================== УТИЛИТЫ =====================
@@ -512,7 +806,7 @@ class MixPanel:
         top.setSpacing(6)
         self.comp = QComboBox()
         self.comp.addItems(sorted(COMPONENT_DB.keys()))
-        self.comp.setFixedWidth(200)
+        self.comp.setFixedWidth(300)
         self.comp.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.share = num_edit(fixed_width=100)
         self.share.editingFinished.connect(self.validate_share_max1)
@@ -630,6 +924,23 @@ class MixPanel:
 
     def widget(self) -> QGroupBox:
         return self.box
+
+    def refresh_component_list(self) -> None:
+        current = self.comp.currentText()
+        self.comp.blockSignals(True)
+        self.comp.clear()
+        self.comp.addItems(sorted(COMPONENT_DB.keys()))
+        # восстановить выбор, если есть
+        idx = self.comp.findText(current)
+        if idx >= 0:
+            self.comp.setCurrentIndex(idx)
+        else:
+            if self.comp.count() > 0:
+                self.comp.setCurrentIndex(0)
+        self.comp.blockSignals(False)
+        # обновить поля параметров (если режим DB)
+        if self.rb_db.isChecked():
+            self.fill_from_db(self.comp.currentText())
 
     # сортировка по Tb автоматически
     def _resort(self) -> None:
@@ -1011,14 +1322,23 @@ class MainWindow(QMainWindow):
             exp_act = QAction("Экспорт входных данных...", self)
             imp_xlsx = QAction("Импорт из Excel (.xlsx)...", self)
             exp_xlsx = QAction("Экспорт в Excel (.xlsx)...", self)
+            # Component DB actions
+            act_imp_db = QAction("Импорт базы компонентов (Excel)...", self)
+            # Убрали CSV-экспорт базы компонентов, оставляем только Excel-экспорт
+            act_exp_db_xlsx = QAction("Экспорт базы компонентов (Excel)...", self)
             file_menu.addAction(imp_act)
             file_menu.addAction(exp_act)
             file_menu.addAction(imp_xlsx)
             file_menu.addAction(exp_xlsx)
+            file_menu.addSeparator()
+            file_menu.addAction(act_imp_db)
+            file_menu.addAction(act_exp_db_xlsx)
             imp_act.triggered.connect(self.import_inputs)  # type: ignore[call-arg]
             exp_act.triggered.connect(self.export_inputs)  # type: ignore[call-arg]
             imp_xlsx.triggered.connect(self.import_inputs_xlsx)  # type: ignore[call-arg]
             exp_xlsx.triggered.connect(self.export_inputs_xlsx)  # type: ignore[call-arg]
+            act_imp_db.triggered.connect(self.import_component_db_xlsx)  # type: ignore[call-arg]
+            act_exp_db_xlsx.triggered.connect(self.export_component_db_xlsx)  # type: ignore[call-arg]
             # --- Меню помощи ---
             help_menu = self.menuBar().addMenu("Помощь")
             act_help = QAction("Справка", self)
@@ -1964,6 +2284,93 @@ class MainWindow(QMainWindow):
                 self._importing = False
             except Exception:
                 pass
+
+    # ===================== ИМПОРТ/ЭКСПОРТ БАЗЫ КОМПОНЕНТОВ =====================
+    def import_component_db_csv(self) -> None:
+        try:
+            path, _ = QFileDialog.getOpenFileName(
+                self,
+                "Импорт базы компонентов (CSV)",
+                str(DATA_DIR),
+                "CSV Files (*.csv);;All Files (*)",
+            )
+            if not path:
+                return
+            stats = load_component_db_from_csv(path, merge=True)
+            # обновить выпадающие списки компонентов в обеих панелях смесей
+            try:
+                self.cold_mix.refresh_component_list()
+            except Exception:
+                pass
+            try:
+                self.hot_mix.refresh_component_list()
+            except Exception:
+                pass
+            QMessageBox.information(
+                self,
+                "Импорт базы компонентов",
+                f"Добавлено: {stats.get('added',0)}\nОбновлено: {stats.get('updated',0)}\nПропущено: {stats.get('skipped',0)}",
+            )
+        except Exception as e:
+            QMessageBox.warning(self, "Ошибка импорта базы компонентов", str(e))
+
+    def import_component_db_xlsx(self) -> None:
+        if openpyxl is None:
+            QMessageBox.warning(
+                self,
+                "Excel импорт",
+                "Для импорта из Excel требуется пакет openpyxl.",
+            )
+            return
+        try:
+            path, _ = QFileDialog.getOpenFileName(
+                self,
+                "Импорт базы компонентов (Excel)",
+                str(DATA_DIR),
+                "Excel Files (*.xlsx);;All Files (*)",
+            )
+            if not path:
+                return
+            stats = load_component_db_from_xlsx(path, merge=True)
+            try:
+                self.cold_mix.refresh_component_list()
+            except Exception:
+                pass
+            try:
+                self.hot_mix.refresh_component_list()
+            except Exception:
+                pass
+            QMessageBox.information(
+                self,
+                "Импорт базы компонентов",
+                f"Добавлено: {stats.get('added',0)}\nОбновлено: {stats.get('updated',0)}\nПропущено: {stats.get('skipped',0)}",
+            )
+        except Exception as e:
+            QMessageBox.warning(self, "Ошибка импорта базы компонентов", str(e))
+
+    # CSV-экспорт базы компонентов удалён; используйте экспорт в Excel.
+
+    def export_component_db_xlsx(self) -> None:
+        if openpyxl is None:
+            QMessageBox.warning(
+                self,
+                "Excel экспорт",
+                "Для экспорта в Excel требуется пакет openpyxl.",
+            )
+            return
+        try:
+            path, _ = QFileDialog.getSaveFileName(
+                self,
+                "Экспорт базы компонентов (Excel)",
+                str(DATA_DIR / "components.xlsx"),
+                "Excel Files (*.xlsx);;All Files (*)",
+            )
+            if not path:
+                return
+            export_component_db_to_xlsx(path)
+            QMessageBox.information(self, "Экспорт базы компонентов", "Готово.")
+        except Exception as e:
+            QMessageBox.warning(self, "Ошибка экспорта базы компонентов", str(e))
 
     def _can_compute_sigma_k(self) -> bool:
         """Return True if we have enough validated inputs to compute sigma and k."""
