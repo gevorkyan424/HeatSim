@@ -17,7 +17,7 @@ dist/
 
 # Environments
 .env
-.venv
+.venv/
 venv/
 ENV/
 
@@ -31,7 +31,8 @@ HeatSim-distribution.zip
 # OneDrive/temp files
 ~$*
 
-# Local virtual env\n.venv/
+# Local virtual env
+.venv/
 
 # Logs and caches
 logs/
