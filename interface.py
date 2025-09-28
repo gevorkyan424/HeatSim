@@ -132,6 +132,7 @@ COMPONENT_DB: Dict[str, Tuple[float, float, float, float]] = {
 # ---- Импорт/экспорт базы компонентов ----
 DATA_DIR = Path(os.path.dirname(os.path.abspath(__file__))) / "data"
 
+
 def _parse_float_cell(val: Optional[str]) -> Optional[float]:
     if val is None:
         return None
@@ -143,7 +144,10 @@ def _parse_float_cell(val: Optional[str]) -> Optional[float]:
     except Exception:
         return None
 
-def load_component_db_from_xlsx(path: os.PathLike[str] | str, merge: bool = True) -> Dict[str, int]:
+
+def load_component_db_from_xlsx(
+    path: os.PathLike[str] | str, merge: bool = True
+) -> Dict[str, int]:
     """Load component properties from an Excel .xlsx file.
 
     Expected header names are the same as CSV loader (Russian/English variants):
@@ -166,12 +170,14 @@ def load_component_db_from_xlsx(path: os.PathLike[str] | str, merge: bool = True
             return stats
         # header row
         header = [str(h or "").strip() for h in rows[0]]
+
         def hfind(*options: str) -> Optional[int]:
             low = [h.lower() for h in header]
             for o in options:
                 if o.lower() in low:
                     return low.index(o.lower())
             return None
+
         i_name = hfind("имя", "name")
         i_tb = hfind("tb_k", "tb")
         i_cf = hfind("cf_kj_per_kgk", "c_f", "cf")
@@ -185,6 +191,7 @@ def load_component_db_from_xlsx(path: os.PathLike[str] | str, merge: bool = True
                 if not name:
                     stats["skipped"] += 1
                     continue
+
                 def getf(idx: Optional[int]) -> Optional[float]:
                     if idx is None or idx >= len(r):
                         return None
@@ -195,6 +202,7 @@ def load_component_db_from_xlsx(path: os.PathLike[str] | str, merge: bool = True
                         return float(str(v).replace(",", "."))
                     except Exception:
                         return None
+
                 tb = getf(i_tb)
                 cf = getf(i_cf)
                 cp = getf(i_cp)
@@ -237,7 +245,11 @@ def load_component_db_from_xlsx(path: os.PathLike[str] | str, merge: bool = True
         logger.exception("Ошибка импорта базы компонентов из Excel: %s", e)
         raise
     return stats
-def load_component_db_from_csv(path: os.PathLike[str] | str, merge: bool = True) -> Dict[str, int]:
+
+
+def load_component_db_from_csv(
+    path: os.PathLike[str] | str, merge: bool = True
+) -> Dict[str, int]:
     """Load component properties from CSV.
 
     Expected columns (case-insensitive, Russian/English supported):
@@ -266,7 +278,8 @@ def load_component_db_from_csv(path: os.PathLike[str] | str, merge: bool = True)
                 dialect.delimiter = ";"  # type: ignore[attr-defined]
             rdr = csv.DictReader(f, dialect=dialect)
             # нормализуем заголовки
-            headers = { (h or "").strip().lower(): h for h in (rdr.fieldnames or []) }
+            headers = {(h or "").strip().lower(): h for h in (rdr.fieldnames or [])}
+
             def hkey(*options: str) -> Optional[str]:
                 for o in options:
                     if o.lower() in headers:
@@ -331,7 +344,9 @@ def load_component_db_from_csv(path: os.PathLike[str] | str, merge: bool = True)
         raise
     return stats
 
+
 # CSV-экспорт базы компонентов удалён по требованию; используйте Excel-экспорт.
+
 
 def export_component_db_to_xlsx(path: os.PathLike[str] | str) -> None:
     """Export current COMPONENT_DB to an Excel .xlsx workbook.
@@ -370,12 +385,15 @@ def export_component_db_to_xlsx(path: os.PathLike[str] | str) -> None:
     wb = openpyxl.Workbook()
     ws = cast(Any, wb.active)
     ws.title = "components"
-    ws.append(["имя", "Tb_K", "Cf_kJ_per_kgK", "Cp_kJ_per_kgK", "rf_kJ_per_kg", "source_url"])
+    ws.append(
+        ["имя", "Tb_K", "Cf_kJ_per_kgK", "Cp_kJ_per_kgK", "rf_kJ_per_kg", "source_url"]
+    )
     for name in sorted(COMPONENT_DB.keys()):
         tb, cf, cp, rf = COMPONENT_DB[name]
         url = url_map.get(name, "")
         ws.append([name, tb, cf, cp, rf, url])
     wb.save(path)
+
 
 def _auto_load_components_db() -> Optional[Dict[str, int]]:
     """Auto-load DB from known CSV if present. Returns stats or None."""
@@ -395,6 +413,7 @@ def _auto_load_components_db() -> Optional[Dict[str, int]]:
             # не критично для старта приложения
             return None
     return None
+
 
 # Выполним авто-загрузку на старте (не критично при ошибке)
 try:
