@@ -36,3 +36,7 @@ HeatSim-distribution.zip
 # Logs and caches
 logs/
 data/cache/
+
+# Ignore generic zip backups created by scripts
+*.zip
+*backup*.zip
