@@ -24,6 +24,7 @@ from PyQt5.QtCore import (
 )
 from PyQt5.QtWidgets import (
     QMainWindow,
+    QApplication,
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
@@ -675,7 +676,9 @@ class FlowPanel:
         h3.addWidget(self.p_lock)
         grid.addLayout(h3, row, 1)
 
-        self.box.setFixedSize(700, 180)
+        # Расширяемая по горизонтали панель, фиксируем только высоту
+        self.box.setFixedHeight(180)
+        self.box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         grid.setHorizontalSpacing(12)
         grid.setVerticalSpacing(8)
 
@@ -1152,6 +1155,8 @@ class HydroPanel(QGroupBox):
         self, title: str = "Гидродинамика потоков", parent: Optional[QWidget] = None
     ):
         super().__init__(title, parent)
+        # Расширяемая по ширине, высота по содержимому
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         base = os.path.join(
             os.path.dirname(os.path.abspath(__file__)), "assets", "images"
         )
@@ -1191,6 +1196,7 @@ class HydroPanel(QGroupBox):
 
         self.image_label = QLabel()
         self.image_label.setAlignment(Qt.AlignCenter)
+        # Фиксированный размер изображения
         self.image_label.setFixedSize(350, 175)
         self.image_label.setFrameShape(QFrame.Box)
         self.image_label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
@@ -1269,6 +1275,8 @@ class HydroPanel(QGroupBox):
 class OutputPanel(QGroupBox):
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__("Параметры теплообменника", parent)
+        # Расширяемая по ширине, фиксированная по высоте
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         g = QGridLayout(self)
         self.q = num_edit(read_only=False, fixed_width=120)
         self.q_lock = lock_button_for(self.q)
@@ -1323,7 +1331,28 @@ class MainWindow(QMainWindow):
         # track changes after import to show recalc button
         self._post_import_changed = False
         self.setWindowTitle("Двухпоточный теплообмен")
-        self.setFixedSize(1600, 1050)
+        # Сделаем окно ресайзабельным: установим минимальный размер
+        # и стартовый размер. Высоту уменьшаем на 50px (с 1025 до 975).
+        self.setMinimumSize(1600, 975)
+        self.resize(1600, 975)
+        # Центрирование окна при первом запуске
+        try:
+            scr = self.screen()  # type: ignore[attr-defined]
+        except Exception:
+            scr = None
+        if scr is None:
+            try:
+                scr = QApplication.primaryScreen()
+            except Exception:
+                scr = None
+        if scr is not None:
+            try:
+                geo = scr.availableGeometry()
+                x = geo.x() + (geo.width() - self.width()) // 2
+                y = geo.y() + (geo.height() - self.height()) // 2
+                self.move(max(geo.left(), x), max(geo.top(), y))
+            except Exception:
+                pass
         # статусная строка
         self.status = self.statusBar()
         try:
@@ -1352,6 +1381,11 @@ class MainWindow(QMainWindow):
             file_menu.addSeparator()
             file_menu.addAction(act_imp_db)
             file_menu.addAction(act_exp_db_xlsx)
+
+            # Меню "Вид"
+            view_menu = self.menuBar().addMenu("Вид")
+            act_reset_view = QAction("Сбросить вид (по умолчанию)", self)
+            view_menu.addAction(act_reset_view)
             imp_act.triggered.connect(self.import_inputs)  # type: ignore[call-arg]
             exp_act.triggered.connect(self.export_inputs)  # type: ignore[call-arg]
             imp_xlsx.triggered.connect(self.import_inputs_xlsx)  # type: ignore[call-arg]
@@ -1374,6 +1408,7 @@ class MainWindow(QMainWindow):
             act_logs.triggered.connect(self.show_logs_dialog)
             act_license.triggered.connect(self.show_license_dialog)
             act_about.triggered.connect(self.show_about_dialog)
+            act_reset_view.triggered.connect(self.reset_view)
         except Exception as e:
             logger.exception("Ошибка создания меню: %s", e)
 
@@ -1487,6 +1522,9 @@ class MainWindow(QMainWindow):
         self._recalc_blink_timer.start(700)
         right_col.addStretch(1)
         row3.addLayout(right_col, 0)
+        # Обе колонки расширяются равномерно по ширине, как панели смесей
+        row3.setStretch(0, 1)  # HydroPanel
+        row3.setStretch(1, 1)  # Right column
 
         # связи
         try:
@@ -1624,6 +1662,7 @@ class MainWindow(QMainWindow):
                     self.hot_mix.mix_rows()
                 ):
                     self.recalc_btn.show()
+                    self.calc_btn.hide()
         except Exception:
             pass
 
@@ -1642,24 +1681,32 @@ class MainWindow(QMainWindow):
             self._suppress_full_calc_after_import = False
         except Exception:
             pass
+        success = False
         try:
-            self.on_calc()
+            success = bool(self.on_calc())
         except Exception:
-            pass
+            success = False
         try:
-            self._explicit_calc_done = True
-            self._results_stale = False
-            self.recalc_btn.hide()
-            try:
-                self.status.showMessage("Вычисления выполнены успешно", 4000)
-            except Exception:
-                pass
+            if success:
+                self._explicit_calc_done = True
+                self._results_stale = False
+                self.recalc_btn.hide()
+                self.calc_btn.show()
+                # Save snapshot of inputs after explicit successful calculation
+                try:
+                    self._last_calc_snapshot = self._relevant_inputs_snapshot()
+                except Exception:
+                    pass
+                try:
+                    self.status.showMessage("Вычисления выполнены успешно", 4000)
+                except Exception:
+                    pass
         except Exception:
             pass
 
     def _on_schema_changed(self, checked: bool) -> None:
         """Called when hydro schema radio buttons toggle.
-        Always trigger a recalculation when the schema changes (user expects σ/K to update).
+        При смене схемы помечаем результаты как устаревшие и показываем кнопку «Перерасчёт».
         """
         try:
             if not checked:
@@ -1675,9 +1722,19 @@ class MainWindow(QMainWindow):
                 except Exception:
                     pass
                 return
-            # Полный пересчёт только после явного вычисления
+            # После явного вычисления: не пересчитываем автоматически, а помечаем устаревание
             try:
-                self.on_calc()
+                self._results_stale = True
+                # Обновим UI: показать «Перерасчёт», скрыть «Вычислить»
+                try:
+                    self._mark_stale_results()
+                except Exception:
+                    # если _mark_stale_results по какой-то причине не сработал — принудительно
+                    if self._mix_valid(self.cold_mix.mix_rows()) and self._mix_valid(
+                        self.hot_mix.mix_rows()
+                    ):
+                        self.recalc_btn.show()
+                        self.calc_btn.hide()
             except Exception:
                 pass
         except Exception:
@@ -2398,24 +2455,34 @@ class MainWindow(QMainWindow):
             hot = self.hot_panel.to_dict()
             cold_mix = self.cold_mix.mix_rows()
             hot_mix = self.hot_mix.mix_rows()
-
-            # require Q present
-            if not self.out_panel.q.text().strip():
+            # require either Q or hot T_out present (the calculate() can derive missing t_out from Q)
+            q_present = bool(self.out_panel.q.text().strip())
+            hot_tout_present = bool(self.hot_panel.t_out.text().strip())
+            if not (q_present or hot_tout_present):
                 return False
 
-            # require both streams to have t_in and t_out and m and valid mixes
+            # require cold stream to have t_in, t_out, m and valid mix
             cold_ok = (
                 bool(cold.get("t_in"))
                 and bool(cold.get("t_out"))
                 and bool(cold.get("m"))
                 and self._mix_valid(cold_mix)
             )
-            hot_ok = (
-                bool(hot.get("t_in"))
-                and bool(hot.get("t_out"))
-                and bool(hot.get("m"))
-                and self._mix_valid(hot_mix)
-            )
+
+            # For hot stream: if hot_tout is present, require t_in, t_out and m; if only Q is present,
+            # require at least t_in and m (t_out may be computed by calculate()).
+            hot_has_tin = bool(hot.get("t_in"))
+            hot_has_m = bool(hot.get("m"))
+            if hot_tout_present:
+                hot_ok = (
+                    hot_has_tin
+                    and bool(hot.get("t_out"))
+                    and hot_has_m
+                    and self._mix_valid(hot_mix)
+                )
+            else:
+                hot_ok = hot_has_tin and hot_has_m and self._mix_valid(hot_mix)
+
             return cold_ok and hot_ok
         except Exception:
             return False
@@ -2523,14 +2590,28 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
-    def on_calc(self) -> None:
+    def on_calc(self) -> bool:
         # If suppression is active (import just happened), ignore programmatic calls.
         if getattr(self, "_suppress_full_calc_after_import", False):
-            return
+            return False
         cold = self.cold_panel.to_dict()
         hot = self.hot_panel.to_dict()
         cold_mix = self.cold_mix.mix_rows()
         hot_mix = self.hot_mix.mix_rows()
+        # Before computing sigma/K require that user provided either Q or T_out (hot).
+        q_text = self.out_panel.q.text().strip()
+        t_out_text = self.hot_panel.t_out.text().strip()
+        # If both fields are empty, refuse to compute sigma/K and inform user.
+        if (not q_text) and (not t_out_text):
+            QMessageBox.warning(
+                self,
+                "Невозможно вычислить",
+                (
+                    "σ и K не могут быть посчитаны, потому что неизвестны Q и T_out (hot).\n"
+                    "Пожалуйста, заполните Q или T_out горячего потока вручную и повторите попытку."
+                ),
+            )
+            return False
         q_val = to_float(self.out_panel.q.text())
         schema = self.hydro.current_schema()
 
@@ -2657,8 +2738,12 @@ class MainWindow(QMainWindow):
                     "Расчёт",
                     "Функция расчёта в logic.py не найдена. Заполните её.",
                 )
+                return False
         except Exception as e:
             QMessageBox.warning(self, "Ошибка расчёта", str(e))
+            return False
+        return True
+        return True
 
     def _auto_calc_minimal(self) -> None:
         """Выполнить быстрый авторасчёт, только для заполнения `q` или `t_out_plus`.
@@ -2742,6 +2827,7 @@ class MainWindow(QMainWindow):
                 self._post_import_changed = False
                 self._suppress_full_calc_after_import = False
                 self.recalc_btn.hide()
+                self.calc_btn.show()
             except Exception:
                 pass
 
@@ -2996,6 +3082,7 @@ class MainWindow(QMainWindow):
                 hot_flow=hot_cast,
                 cold_mix=cold_list,
                 hot_mix=hot_list,
+                schema=self.hydro.current_schema(),
                 parent=self,
             )
             self._analysis_win.show()
@@ -3009,30 +3096,252 @@ class MainWindow(QMainWindow):
         """
         try:
             if getattr(self, "_explicit_calc_done", False):
+                # If user just unlocked a widget but didn't type, ignore this event
+                try:
+                    unlock_widgets = (
+                        self.cold_panel.t_in,
+                        self.cold_panel.t_out,
+                        self.cold_panel.m,
+                        self.hot_panel.t_in,
+                        self.hot_panel.t_out,
+                        self.hot_panel.m,
+                        self.out_panel.q,
+                    )
+                    for w in unlock_widgets:
+                        if getattr(w, "_just_unlocked_waiting", False) and not getattr(
+                            w, "_just_unlocked_typed", False
+                        ):
+                            return
+                except Exception:
+                    pass
+
+                # Only mark as stale if inputs actually differ from last calculated snapshot
                 self._results_stale = True
-                if self._mix_valid(self.cold_mix.mix_rows()) and self._mix_valid(
-                    self.hot_mix.mix_rows()
-                ):
-                    self.recalc_btn.show()
+                try:
+                    # compute current snapshot and compare
+                    cur = self._relevant_inputs_snapshot()
+                    last = getattr(self, "_last_calc_snapshot", None)
+                    if last is None:
+                        # no previous successful calculation snapshot -> do not show recalc
+                        return
+                    else:
+                        if (
+                            cur != last
+                            and self._mix_valid(self.cold_mix.mix_rows())
+                            and self._mix_valid(self.hot_mix.mix_rows())
+                        ):
+                            self.recalc_btn.show()
+                            self.calc_btn.hide()
+                except Exception:
+                    # fallback to old behaviour on any error
+                    if self._mix_valid(self.cold_mix.mix_rows()) and self._mix_valid(
+                        self.hot_mix.mix_rows()
+                    ):
+                        self.recalc_btn.show()
+                        self.calc_btn.hide()
         except Exception:
             pass
 
     def _on_recalc_clicked(self) -> None:
+        # Ensure suppression flags are cleared before explicit recalculation
         try:
             self._suppress_full_calc_after_import = False
             self._post_import_changed = False
             self._results_stale = False
         except Exception:
             pass
+
+        # Quick pre-check: if we don't have enough validated inputs, inform user instead of calling on_calc
         try:
-            # Выполняем полный расчёт (как при кнопке Вычислить), но без скрытия кнопки до завершения
-            self.on_calc()
+            can_compute = self._can_compute_sigma_k()
+        except Exception:
+            can_compute = False
+
+        if not can_compute:
+            try:
+                # build helpful message listing missing/invalid parts
+                parts = []
+                try:
+                    if (
+                        not self.out_panel.q.text().strip()
+                        and not self.hot_panel.t_out.text().strip()
+                    ):
+                        parts.append(
+                            "Q или T_out (hot) — хотя бы одно из них должно быть заполнено"
+                        )
+                except Exception:
+                    parts.append("Q/T_out — недоступно")
+                try:
+                    if not self.cold_panel.t_in.text().strip():
+                        parts.append("Cold T_in (вход холодного потока)")
+                    if not self.cold_panel.t_out.text().strip():
+                        parts.append("Cold T_out (выход холодного потока)")
+                    if not self.cold_panel.m.text().strip():
+                        parts.append("Cold m (расход холодного потока)")
+                except Exception:
+                    parts.append("Поля холодного потока — недоступны")
+                try:
+                    if not self.hot_panel.t_in.text().strip():
+                        parts.append("Hot T_in (вход горячего потока)")
+                    if not self.hot_panel.t_out.text().strip():
+                        parts.append("Hot T_out (выход горячего потока)")
+                    if not self.hot_panel.m.text().strip():
+                        parts.append("Hot m (расход горячего потока)")
+                except Exception:
+                    parts.append("Поля горячего потока — недоступны")
+                try:
+                    if not self._mix_valid(self.cold_mix.mix_rows()):
+                        parts.append(
+                            "Смесь холодного потока: суммы долей должны равняться 1"
+                        )
+                except Exception:
+                    parts.append("Смесь холодного потока — недоступна")
+                try:
+                    if not self._mix_valid(self.hot_mix.mix_rows()):
+                        parts.append(
+                            "Смесь горячего потока: суммы долей должны равняться 1"
+                        )
+                except Exception:
+                    parts.append("Смесь горячего потока — недоступна")
+
+                body = (
+                    "Невозможно выполнить пересчёт σ/K — не хватает входных данных:\n\n"
+                    + "\n".join(f"- {p}" for p in parts)
+                )
+                QMessageBox.warning(self, "Перерасчёт — недостаточно данных", body)
+            except Exception:
+                try:
+                    QMessageBox.warning(
+                        self,
+                        "Перерасчёт",
+                        "Недостаточно данных для пересчёта σ/K. Заполните, пожалуйста, необходимые поля.",
+                    )
+                except Exception:
+                    pass
+            return
+
+        success = False
+        res_val = None
+        err_msg = None
+        try:
+            # Выполняем полный расчёт (как при кнопке Вычислить) and capture result/exception
+            try:
+                res_val = self.on_calc()
+            except Exception as e:
+                res_val = None
+                err_msg = str(e)
+            success = bool(res_val)
+        except Exception:
+            success = False
+
+        try:
+            if success:
+                # on success, hide the recalc button and save snapshot
+                try:
+                    self._last_calc_snapshot = self._relevant_inputs_snapshot()
+                except Exception:
+                    pass
+                try:
+                    self.recalc_btn.hide()
+                    self.calc_btn.show()
+                except Exception:
+                    pass
+                try:
+                    self._explicit_calc_done = True
+                except Exception:
+                    pass
+            else:
+                # keep the button visible and inform the user with diagnostics
+                try:
+                    # gather some useful internal state for diagnostics
+                    try:
+                        q_txt = self.out_panel.q.text().strip()
+                    except Exception:
+                        q_txt = "<error>"
+                    try:
+                        t_out_txt = self.hot_panel.t_out.text().strip()
+                    except Exception:
+                        t_out_txt = "<error>"
+                    try:
+                        can_compute = bool(self._can_compute_sigma_k())
+                    except Exception:
+                        can_compute = False
+                    try:
+                        cur_snap = self._relevant_inputs_snapshot()
+                    except Exception:
+                        cur_snap = {}
+                    last_snap = getattr(self, "_last_calc_snapshot", None)
+                    diag = (
+                        f"Перерасчёт не выполнен.\n\n"
+                        f"Внутреннее состояние:\n"
+                        f"_suppress_full_calc_after_import={getattr(self, '_suppress_full_calc_after_import', None)}\n"
+                        f"_post_import_changed={getattr(self, '_post_import_changed', None)}\n"
+                        f"_results_stale={getattr(self, '_results_stale', None)}\n"
+                        f"Q='{q_txt}'  T_out='{t_out_txt}'  can_compute={can_compute}\n\n"
+                        f"last_snapshot={last_snap}\n"
+                        f"current_snapshot={cur_snap}\n\n"
+                        f"on_calc returned: {res_val!r}\n"
+                        f"exception: {err_msg or '<none>'}"
+                    )
+                    QMessageBox.warning(self, "Перерасчёт", diag)
+                except Exception:
+                    # fallback simple message
+                    try:
+                        QMessageBox.warning(
+                            self,
+                            "Перерасчёт",
+                            "Перерасчёт не выполнен — проверьте входные данные или сообщение об ошибке.",
+                        )
+                    except Exception:
+                        pass
         except Exception:
             pass
+
+    def _relevant_inputs_snapshot(self) -> Dict[str, Any]:
+        """Return a small dict snapshot of input values that affect σ/K calculations.
+        Used to determine whether inputs changed since last explicit calculation.
+        """
         try:
-            self.recalc_btn.hide()
+            snap = {}
+
+            # numeric fields that affect sigma/K (ignore pressure 'p' which is not used)
+            def num_of(widget):
+                try:
+                    return round(float(widget.text().strip().replace(",", ".")), 6)
+                except Exception:
+                    return None
+
+            snap["cold_t_in"] = num_of(self.cold_panel.t_in)
+            snap["cold_t_out"] = num_of(self.cold_panel.t_out)
+            snap["cold_m"] = num_of(self.cold_panel.m)
+            snap["hot_t_in"] = num_of(self.hot_panel.t_in)
+            snap["hot_t_out"] = num_of(self.hot_panel.t_out)
+            snap["hot_m"] = num_of(self.hot_panel.m)
+            snap["q"] = num_of(self.out_panel.q)
+            # include simple representation of mixes (shares and cf/cp) to detect significant mix changes
+            try:
+
+                def norm_row(r):
+                    try:
+                        return {
+                            "share": round(float(r.get("share", 0.0)), 6),
+                            "cf": round(float(r.get("cf", 0.0)), 6),
+                            "cp": round(float(r.get("cp", 0.0)), 6),
+                        }
+                    except Exception:
+                        return {"share": None, "cf": None, "cp": None}
+
+                cm = [norm_row(r) for r in self.cold_mix.mix_rows()]
+                hm = [norm_row(r) for r in self.hot_mix.mix_rows()]
+            except Exception:
+                cm = []
+                hm = []
+            snap["cold_mix"] = cm
+            snap["hot_mix"] = hm
+            snap["schema"] = self.hydro.current_schema()
+            return snap
         except Exception:
-            pass
+            return {}
 
     def _lock_imported_fields(self) -> None:
         """Заблокировать поля, заполненные при импорте. Разблокировка при очистке."""
@@ -3141,6 +3450,34 @@ class MainWindow(QMainWindow):
                     self._auto_calc_minimal()
                     return
             # otherwise do nothing
+        except Exception:
+            pass
+
+    def reset_view(self) -> None:
+        """Сброс окна к виду по умолчанию: обычное состояние и базовый размер."""
+        try:
+            # Сброс состояния окна и возврат к базовому размеру
+            self.showNormal()
+            self.resize(1600, 975)
+            # Центрирование на текущем экране
+            try:
+                scr = self.screen()  # type: ignore[attr-defined]
+            except Exception:
+                scr = None
+            if scr is None:
+                try:
+                    scr = QApplication.primaryScreen()
+                except Exception:
+                    scr = None
+            if scr is not None:
+                try:
+                    geo = scr.availableGeometry()
+                    x = geo.x() + (geo.width() - self.width()) // 2
+                    y = geo.y() + (geo.height() - self.height()) // 2
+                    self.move(max(geo.left(), x), max(geo.top(), y))
+                except Exception:
+                    pass
+            self.status.showMessage("Вид сброшен к значению по умолчанию")
         except Exception:
             pass
 

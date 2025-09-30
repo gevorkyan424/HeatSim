@@ -17,9 +17,13 @@ from PyQt5.QtWidgets import (
     QWidget,
     QSizePolicy,
     QGroupBox,
+    QCheckBox,
+    QStyledItemDelegate,
+    QLineEdit,
+    QLabel,
 )
-from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtGui import QBrush, QColor
+from PyQt5.QtCore import Qt, QTimer, QRegularExpression
+from PyQt5.QtGui import QBrush, QColor, QRegularExpressionValidator
 
 try:
     from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas  # type: ignore
@@ -39,6 +43,7 @@ class AnalysisWindow(QDialog):
         hot_flow: Dict[str, float],
         cold_mix: List[Dict[str, Any]],
         hot_mix: List[Dict[str, Any]],
+        schema: str = "Schema1",
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -57,6 +62,7 @@ class AnalysisWindow(QDialog):
         # store original flow states (from main window)
         self._base_cold_flow = dict(cold_flow)
         self._base_hot_flow = dict(hot_flow)
+        self._schema = str(schema or "Schema1")
         layout = QVBoxLayout(self)
 
         # Tables with per-table controls (верх)
@@ -75,6 +81,13 @@ class AnalysisWindow(QDialog):
         self.hot_table = self._create_table(self._hot_mix)
         cold_box.addWidget(self.cold_table)
         hot_box.addWidget(self.hot_table)
+        # Labels showing remaining share to 1.0 for each table
+        self.cold_remaining_label = QLabel("Остаток доли: 1.000000")
+        self.hot_remaining_label = QLabel("Остаток доли: 1.000000")
+        self.cold_remaining_label.setStyleSheet("color: #555;")
+        self.hot_remaining_label.setStyleSheet("color: #555;")
+        cold_box.addWidget(self.cold_remaining_label)
+        hot_box.addWidget(self.hot_remaining_label)
 
         # Buttons under each table
         self.cold_edit_btn = QPushButton("Редактировать")
@@ -97,8 +110,26 @@ class AnalysisWindow(QDialog):
         # Global recalc button (hidden until both approved)
         self.run_btn = QPushButton("Построить графики")
         self.run_btn.hide()
+        self.run_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.run_btn.setStyleSheet("background-color: gold; font-weight: bold;")
-        layout.addWidget(self.run_btn)
+        # Чекбокс на одном уровне с кнопкой; текст сверху, галка снизу
+        self.split_label = QLabel("Разделить компоненты по графикам")
+        self.split_checkbox = QCheckBox("")
+        self.split_container = QWidget()
+        _sv = QVBoxLayout(self.split_container)
+        _sv.setContentsMargins(0, 0, 0, 0)
+        _sv.addWidget(self.split_label, alignment=Qt.AlignHCenter)
+        _sv.addWidget(self.split_checkbox, alignment=Qt.AlignHCenter)
+        # Строка: кнопка занимает всю доступную ширину, контейнер справа
+        btn_row = QHBoxLayout()
+        btn_row.addWidget(self.run_btn, 1)
+        btn_row.addWidget(self.split_container, 0, alignment=Qt.AlignVCenter)
+        layout.addLayout(btn_row)
+        # Чекбокс появляется только после первого построения и далее не скрывается
+        self.split_container.hide()
+        self._split_available = False
+        self.split_checkbox.setChecked(False)
+        self.split_checkbox.toggled.connect(self._on_split_toggled)
 
         # Blinking timer for the run button
         self._blink_timer = QTimer(self)
@@ -119,22 +150,18 @@ class AnalysisWindow(QDialog):
             btn.setAutoDefault(False)
             btn.setDefault(False)
 
+        # Guard to avoid recursive itemChanged handling
+        self._block_item_slot = False
+        # React on share edits to keep sum <= 1 and update remaining labels
+        self.cold_table.itemChanged.connect(self._on_table_item_changed)
+        self.hot_table.itemChanged.connect(self._on_table_item_changed)
+
         # Figure with 3 subplots (внизу)
         self.fig = Figure(figsize=(12, 5))
         self.canvas = FigureCanvas(self.fig)
         self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         layout.addWidget(self.canvas, 1)
-        self.ax_q = self.fig.add_subplot(131)
-        self.ax_sigma = self.fig.add_subplot(132)
-        self.ax_k = self.fig.add_subplot(133)
-        for ax, title in [
-            (self.ax_q, "Q (кВт)"),
-            (self.ax_sigma, "σ (кВт/К)"),
-            (self.ax_k, "K (кВт/К)"),
-        ]:
-            ax.set_title(title)
-            ax.set_xlabel("Доля компонента (сценарий)")
-            ax.grid(True, linestyle=":", alpha=0.5)
+        self._ensure_main_axes()
 
         # Description label (пояснение)
         self.desc_label = QPushButton()
@@ -167,10 +194,43 @@ class AnalysisWindow(QDialog):
         # ensure normal visual (not grey) at start
         self._set_table_locked_visual(self.cold_table, False)
         self._set_table_locked_visual(self.hot_table, False)
+        # Ограничение ввода: только числа [0..1] (точка или запятая)
+        share_delegate = _Share01Delegate(self)
+        self.cold_table.setItemDelegateForColumn(1, share_delegate)
+        self.hot_table.setItemDelegateForColumn(1, share_delegate)
 
         # Initial empty plot (will fill once both approved and run clicked)
         empty: Dict[str, List[float]] = {}
         self._update_plot(empty, empty, empty, empty)
+        self._split_dialog = None
+        # Кэш последних данных графиков для мгновенного переключения вида
+        self._last_series_x = {}
+        self._last_series_q = {}
+        self._last_series_sigma = {}
+        self._last_series_k = {}
+        # Initial remaining recalculation
+        self._recalc_remaining_for(self.cold_table, self.cold_remaining_label)
+        self._recalc_remaining_for(self.hot_table, self.hot_remaining_label)
+
+    def _ensure_main_axes(self) -> None:
+        # (Re)create the standard 1x3 axes layout
+        try:
+            self.fig.clear()
+        except Exception:
+            pass
+        self.ax_q = self.fig.add_subplot(131)
+        self.ax_sigma = self.fig.add_subplot(132)
+        self.ax_k = self.fig.add_subplot(133)
+        for ax, title in [
+            (self.ax_q, "Q (кВт)"),
+            (self.ax_sigma, "σ (кВт/К)"),
+            (self.ax_k, "K (кВт/К)"),
+        ]:
+            ax.set_title(title)
+            ax.set_xlabel("Доля компонента (сценарий)")
+            ax.grid(True, linestyle=":", alpha=0.5)
+        self.fig.tight_layout()
+        self.canvas.draw_idle()
 
     def _toggle_blink(self) -> None:
         if not self.run_btn.isVisible():
@@ -205,7 +265,15 @@ class AnalysisWindow(QDialog):
             keys = ["name", "share", "tb", "cf", "cp", "rf"]
             for c, key in enumerate(keys):
                 val = row.get(key, "")
-                item = QTableWidgetItem(str(val))
+                # Форматируем долю без лишних нулей
+                if key == "share":
+                    try:
+                        sval = self._fmt_num(float(val))
+                    except Exception:
+                        sval = str(val)
+                    item = QTableWidgetItem(sval)
+                else:
+                    item = QTableWidgetItem(str(val))
                 if key != "share":
                     item.setFlags(item.flags() & ~Qt.ItemIsEditable)
                 table.setItem(r, c, item)
@@ -345,7 +413,7 @@ class AnalysisWindow(QDialog):
                     cold_mix=mix_c,
                     hot_mix=mix_h,
                     q=0.0,
-                    schema="Schema1",
+                    schema=self._schema,
                 )
                 q_vals.append(float(ans.get("q", 0.0)))
                 sigma_vals.append(float(ans.get("sigma", 0.0)))
@@ -388,7 +456,7 @@ class AnalysisWindow(QDialog):
                     cold_mix=mix_c,
                     hot_mix=mix_h,
                     q=0.0,
-                    schema="Schema1",
+                    schema=self._schema,
                 )
                 q_vals.append(float(ans.get("q", 0.0)))
                 sigma_vals.append(float(ans.get("sigma", 0.0)))
@@ -399,9 +467,41 @@ class AnalysisWindow(QDialog):
             series_sigma[label] = sigma_vals
             series_k[label] = k_vals
 
-        # Update plot
-        self._update_plot(series_x, series_q, series_sigma, series_k)
+        # Update plot(s)
+        # Сохраняем кэш для дальнейшего быстрого переключения
+        self._last_series_x = series_x
+        self._last_series_q = series_q
+        self._last_series_sigma = series_sigma
+        self._last_series_k = series_k
+
+        # Показываем переключатель разделения после построения (каждый раз)
+        if hasattr(self, "split_container"):
+            self.split_container.show()
+        else:
+            self.split_checkbox.show()
+        self._split_available = True
+
+        if self.split_checkbox.isChecked():
+            self._show_split_plots(self._last_series_x, self._last_series_q, self._last_series_sigma, self._last_series_k)
+        else:
+            # гарантируем 3 оси и обновляем
+            self._ensure_main_axes()
+            self._update_plot(self._last_series_x, self._last_series_q, self._last_series_sigma, self._last_series_k)
         self.run_btn.hide()
+
+    def _on_split_toggled(self, checked: bool) -> None:
+        # Переключение между раздельными графиками (в диалоге) и общими тремя графиками
+        if not self._split_available:
+            return
+        # Если нет данных, ничего не делаем
+        if not (self._last_series_x or self._last_series_q or self._last_series_sigma or self._last_series_k):
+            return
+        if checked:
+            self._show_split_plots(self._last_series_x, self._last_series_q, self._last_series_sigma, self._last_series_k)
+        else:
+            # Возвращаемся к 3 основным графикам в текущем окне
+            self._ensure_main_axes()
+            self._update_plot(self._last_series_x, self._last_series_q, self._last_series_sigma, self._last_series_k)
 
     def _build_scenarios(
         self,
@@ -523,6 +623,72 @@ class AnalysisWindow(QDialog):
         self.fig.tight_layout()
         self.canvas.draw_idle()
 
+    def _show_split_plots(
+        self,
+        series_x: Dict[str, List[float]],
+        series_q: Dict[str, List[float]],
+        series_sigma: Dict[str, List[float]],
+        series_k: Dict[str, List[float]],
+    ) -> None:
+        # Inline rendering: replace 3 main axes with grid rows per component
+        try:
+            labels = [lbl for lbl in sorted(series_x.keys()) if series_x.get(lbl)]
+            n = len(labels)
+            if n == 0:
+                self._ensure_main_axes()
+                self._update_plot(series_x, series_q, series_sigma, series_k)
+                return
+            # Clear figure and build grid n x 3
+            self.fig.clear()
+            for row, label in enumerate(labels, start=1):
+                xs = series_x.get(label, [])
+                qs = series_q.get(label, [])
+                sg = series_sigma.get(label, [])
+                ks = series_k.get(label, [])
+                ax1 = self.fig.add_subplot(n, 3, (row - 1) * 3 + 1)
+                ax2 = self.fig.add_subplot(n, 3, (row - 1) * 3 + 2)
+                ax3 = self.fig.add_subplot(n, 3, (row - 1) * 3 + 3)
+                if xs and qs:
+                    ax1.plot(xs, qs, marker="o", linestyle="-", color="#1f77b4")
+                ax1.set_title(f"{label} — Q (кВт)")
+                ax1.set_xlabel("Доля компонента")
+                ax1.grid(True, linestyle=":", alpha=0.4)
+
+                if xs and sg:
+                    ax2.plot(xs, sg, marker="o", linestyle="-", color="#d62728")
+                ax2.set_title(f"{label} — σ (кВт/К)")
+                ax2.set_xlabel("Доля компонента")
+                ax2.grid(True, linestyle=":", alpha=0.4)
+
+                if xs and ks:
+                    ax3.plot(xs, ks, marker="o", linestyle="-", color="#2ca02c")
+                ax3.set_title(f"{label} — K (кВт/К)")
+                ax3.set_xlabel("Доля компонента")
+                ax3.grid(True, linestyle=":", alpha=0.4)
+
+            self.fig.tight_layout()
+            self.canvas.draw_idle()
+
+            # Auto-resize window based on number of rows, but keep within screen bounds
+            try:
+                base_h = 800
+                per_row_extra = 320
+                target_h = base_h + per_row_extra * max(0, n - 1)
+                scr = self.screen()
+                avail = scr.availableGeometry()
+                avail_w = avail.width()
+                avail_h = avail.height()
+                target_h = min(int(target_h), max(600, avail_h - 60))
+                # keep width within screen as well
+                target_w = min(max(self.width(), 1100), max(900, avail_w - 40))
+                self.resize(target_w, target_h)
+            except Exception:
+                pass
+        except Exception:
+            # Fallback to the combined plot
+            self._ensure_main_axes()
+            self._update_plot(series_x, series_q, series_sigma, series_k)
+
     def _set_table_editable(self, table: QTableWidget, editable: bool):
         for r in range(table.rowCount()):
             # only column 1 (share)
@@ -533,6 +699,73 @@ class AnalysisWindow(QDialog):
                 else:
                     it.setFlags(it.flags() & ~Qt.ItemIsEditable)
         table.viewport().update()
+
+    def _fmt_num(self, x: float, decimals: int = 6) -> str:
+        try:
+            s = f"{float(x):.{decimals}f}"
+            s = s.rstrip('0').rstrip('.')
+            return s if s else "0"
+        except Exception:
+            return str(x)
+
+    def _recalc_remaining_for(self, table: QTableWidget, label: QLabel) -> None:
+        total = 0.0
+        try:
+            for r in range(table.rowCount()):
+                it = table.item(r, 1)
+                if not it:
+                    continue
+                v = float(it.text().replace(',', '.'))
+                total += max(0.0, v)
+        except Exception:
+            pass
+        excess = total - 1.0
+        try:
+            if excess > 1e-9:
+                label.setText(f"Перебор: {self._fmt_num(excess)}")
+                label.setStyleSheet("color: #d32f2f; font-weight: bold;")
+            else:
+                remaining = max(0.0, 1.0 - total)
+                label.setText(f"Остаток доли: {self._fmt_num(remaining)}")
+                label.setStyleSheet("color: #555;")
+        except Exception:
+            pass
+
+    def _on_table_item_changed(self, it: QTableWidgetItem) -> None:
+        if self._block_item_slot:
+            return
+        tbl = it.tableWidget()
+        # update only for share column
+        if it.column() != 1:
+            # still refresh remaining to reflect any dependencies
+            if tbl is self.cold_table:
+                self._recalc_remaining_for(self.cold_table, self.cold_remaining_label)
+            elif tbl is self.hot_table:
+                self._recalc_remaining_for(self.hot_table, self.hot_remaining_label)
+            return
+        # parse current value
+        txt = it.text() or ""
+        try:
+            val = float(txt.replace(',', '.')) if txt else 0.0
+            if val < 0:
+                val = 0.0
+        except Exception:
+            val = 0.0
+        # only clamp per-cell to [0..1], allow временное превышение суммы
+        new_val = min(max(0.0, val), 1.0)
+        # write back if clamped or normalization/formatting differs
+        new_txt = self._fmt_num(new_val)
+        if abs(new_val - val) > 1e-12 or (txt and ',' in txt) or (txt != new_txt):
+            try:
+                self._block_item_slot = True
+                it.setText(new_txt)
+            finally:
+                self._block_item_slot = False
+        # update remaining label
+        if tbl is self.cold_table:
+            self._recalc_remaining_for(self.cold_table, self.cold_remaining_label)
+        elif tbl is self.hot_table:
+            self._recalc_remaining_for(self.hot_table, self.hot_remaining_label)
 
     def _set_table_locked_visual(self, table: QTableWidget, locked: bool) -> None:
         color = QColor("#9e9e9e") if locked else QColor("#000000")
@@ -594,10 +827,36 @@ class AnalysisWindow(QDialog):
             self._cold_locked = False
         else:
             self._hot_locked = False
-        self.run_btn.hide()
+        # Кнопка остаётся видимой
+        try:
+            self.run_btn.show()
+            self.run_btn.setEnabled(True)
+        except Exception:
+            pass
+        # Скрываем разделение до следующего построения и сбрасываем состояние
+        try:
+            if hasattr(self, "split_container"):
+                self.split_container.hide()
+            else:
+                self.split_checkbox.hide()
+            self.split_checkbox.setChecked(False)
+            self._split_available = False
+        except Exception:
+            pass
+        # Остановить мигание и вернуть базовый стиль
         self._blink_timer.stop()
+        self._blink_on = False
+        self.run_btn.setStyleSheet(self._blink_base_style)
+        # Разблокировать визуал и редактирование
         self._set_table_locked_visual(table, False)
         self._set_table_editable(table, True)
+        # Вернуть 3 основных графика (если были раздельные)
+        self._ensure_main_axes()
+        try:
+            if self._last_series_x:
+                self._update_plot(self._last_series_x, self._last_series_q, self._last_series_sigma, self._last_series_k)
+        except Exception:
+            pass
 
     def _on_run_clicked(self):
         self.recalculate()
@@ -605,5 +864,19 @@ class AnalysisWindow(QDialog):
         self._blink_on = False
         self.run_btn.setStyleSheet(self._blink_base_style)
 
+
+class _Share01Delegate(QStyledItemDelegate):
+    """Разрешает ввод только чисел в диапазоне [0..1] в колонке доли.
+    Допустимы точка или запятая как разделитель."""
+
+    def createEditor(self, parent, option, index):  # type: ignore[override]
+        if index.column() == 1:
+            editor = QLineEdit(parent)
+            # 0 | .x | 0.x | 1 | 1.0...
+            rx = QRegularExpression(r"^\s*(?:0|0?[\.,]\d{1,6}|1(?:[\.,]0{1,6})?)\s*$")
+            editor.setValidator(QRegularExpressionValidator(rx, editor))
+            editor.setPlaceholderText("0..1")
+            return editor
+        return super().createEditor(parent, option, index)
 
 __all__ = ["AnalysisWindow"]
