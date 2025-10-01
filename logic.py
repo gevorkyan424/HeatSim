@@ -612,8 +612,8 @@ def full(
 
     is_multicomponent = len(cold_components) > 1 or len(hot_components) > 1
 
-    if not is_multicomponent:
-        # Schema dispatch
+    # Всегда учитываем гидродинамическую схему (Schema1..5)
+    try:
         schema_map = {
             "Schema1": _schema1,
             "Schema2": _schema2,
@@ -623,7 +623,11 @@ def full(
         }
         fn = schema_map.get(state.schema, _schema1)
         fn(state)
-        # After schema-specific adjustments, recompute single-component Sigma
+    except Exception:
+        pass
+
+    if not is_multicomponent:
+        # После схемных корректировок — однофазная σ
         if all(
             [
                 state.W_hot,
@@ -643,20 +647,24 @@ def full(
             except Exception:
                 pass
     else:
-        # Multi-component path
+        # Многокомпонентный путь: добавляем контактный тип для σ, K — только если ещё не задан схемой
         state.contact_type = _get_contact_type(state, cold_components, hot_components)
         if state.contact_type == "dd":
             _sigma_dd(state)
-            _k_dd(state)
+            if not state.K:
+                _k_dd(state)
         elif state.contact_type == "db":
             _sigma_db(state, cold_components)
-            _k_db(state, cold_components)
+            if not state.K:
+                _k_db(state, cold_components)
         elif state.contact_type == "cb":
             _sigma_cb(state, cold_components, hot_components)
-            _k_cb(state, cold_components, hot_components)
+            if not state.K:
+                _k_cb(state, cold_components, hot_components)
         elif state.contact_type == "cd":
             _sigma_cd(state, hot_components)
-            _k_cd(state, hot_components)
+            if not state.K:
+                _k_cd(state, hot_components)
 
     return state
 

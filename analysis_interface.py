@@ -68,14 +68,15 @@ class AnalysisWindow(QDialog):
         # Tables with per-table controls (верх)
         tables_box = QHBoxLayout()
         layout.addLayout(tables_box, 0)
-        cold_group = QGroupBox("Холодный поток")
-        hot_group = QGroupBox("Горячий поток")
-        cold_group.setStyleSheet("")
-        hot_group.setStyleSheet("")
-        tables_box.addWidget(cold_group)
-        tables_box.addWidget(hot_group)
-        cold_box = QVBoxLayout(cold_group)
-        hot_box = QVBoxLayout(hot_group)
+        self.cold_group = QGroupBox("Холодный поток")
+        self.hot_group = QGroupBox("Горячий поток")
+        # начальная нейтральная тема
+        self.cold_group.setStyleSheet("")
+        self.hot_group.setStyleSheet("")
+        tables_box.addWidget(self.cold_group)
+        tables_box.addWidget(self.hot_group)
+        cold_box = QVBoxLayout(self.cold_group)
+        hot_box = QVBoxLayout(self.hot_group)
 
         self.cold_table = self._create_table(self._cold_mix)
         self.hot_table = self._create_table(self._hot_mix)
@@ -172,12 +173,9 @@ class AnalysisWindow(QDialog):
         layout.addWidget(self.desc_label)
 
         # Connections
-        self.cold_edit_btn.clicked.connect(
-            lambda: self._on_edit_clicked(self.cold_table, "cold")
-        )
-        self.hot_edit_btn.clicked.connect(
-            lambda: self._on_edit_clicked(self.hot_table, "hot")
-        )
+        # Оба переходят в режим редактирования
+        self.cold_edit_btn.clicked.connect(self._enter_edit_mode)
+        self.hot_edit_btn.clicked.connect(self._enter_edit_mode)
         self.cold_apply_btn.clicked.connect(
             lambda: self._apply_table(self.cold_table, which="cold")
         )
@@ -185,6 +183,11 @@ class AnalysisWindow(QDialog):
             lambda: self._apply_table(self.hot_table, which="hot")
         )
         self.run_btn.clicked.connect(self._on_run_clicked)
+        # Закрыть раздельное окно при уничтожении основного
+        try:
+            self.destroyed.connect(self._on_destroyed)
+        except Exception:
+            pass
 
         self._cold_locked = False
         self._hot_locked = False
@@ -194,6 +197,9 @@ class AnalysisWindow(QDialog):
         # ensure normal visual (not grey) at start
         self._set_table_locked_visual(self.cold_table, False)
         self._set_table_locked_visual(self.hot_table, False)
+        # начальная подсветка: редактирование активно => жёлтый фон
+        self._set_group_highlight("cold", "editing")
+        self._set_group_highlight("hot", "editing")
         # Ограничение ввода: только числа [0..1] (точка или запятая)
         share_delegate = _Share01Delegate(self)
         self.cold_table.setItemDelegateForColumn(1, share_delegate)
@@ -202,7 +208,8 @@ class AnalysisWindow(QDialog):
         # Initial empty plot (will fill once both approved and run clicked)
         empty: Dict[str, List[float]] = {}
         self._update_plot(empty, empty, empty, empty)
-        self._split_dialog = None
+        # Отдельное окно для раздельных графиков
+        self._split_window = None  # type: ignore[var-annotated]
         # Кэш последних данных графиков для мгновенного переключения вида
         self._last_series_x = {}
         self._last_series_q = {}
@@ -231,6 +238,43 @@ class AnalysisWindow(QDialog):
             ax.grid(True, linestyle=":", alpha=0.5)
         self.fig.tight_layout()
         self.canvas.draw_idle()
+
+    def _enter_edit_mode(self) -> None:
+        # Сброс блокировок обеих таблиц
+        self._cold_locked = False
+        self._hot_locked = False
+        # Визуал и редактирование
+        self._set_table_locked_visual(self.cold_table, False)
+        self._set_table_locked_visual(self.hot_table, False)
+        self._set_table_editable(self.cold_table, True)
+        self._set_table_editable(self.hot_table, True)
+        # Подсветка
+        self._set_group_highlight("cold", "editing")
+        self._set_group_highlight("hot", "editing")
+        # Кнопка построения доступна
+        try:
+            self.run_btn.show()
+            self.run_btn.setEnabled(True)
+        except Exception:
+            pass
+        # Оставляем чекбокс как есть; если окно раздельных графиков открыто — оно остаётся и обновится после пересчета
+        # Останавливаем мигание
+        self._blink_timer.stop()
+        self._blink_on = False
+        self.run_btn.setStyleSheet(self._blink_base_style)
+        # Обновить комбинированные графики с последними данными
+        self._ensure_main_axes()
+        try:
+            if self._last_series_x:
+                self._update_plot(
+                    self._last_series_x,
+                    self._last_series_q,
+                    self._last_series_sigma,
+                    self._last_series_k,
+                )
+        except Exception:
+            pass
+
 
     def _toggle_blink(self) -> None:
         if not self.run_btn.isVisible():
@@ -398,8 +442,6 @@ class AnalysisWindow(QDialog):
             except Exception:
                 orig_share = float(self._base_cold_mix[i].get("share", 0.0))
             approved_share = float(comp.get("share", 0.0))
-            if abs(approved_share - orig_share) < 1e-9:
-                continue
             axis = gen_axis(orig_share, approved_share, 0.1)
             q_vals: List[float] = []
             sigma_vals: List[float] = []
@@ -441,8 +483,6 @@ class AnalysisWindow(QDialog):
             except Exception:
                 orig_share = float(self._base_hot_mix[i].get("share", 0.0))
             approved_share = float(comp.get("share", 0.0))
-            if abs(approved_share - orig_share) < 1e-9:
-                continue
             axis = gen_axis(orig_share, approved_share, 0.1)
             q_vals: List[float] = []
             sigma_vals: List[float] = []
@@ -481,27 +521,59 @@ class AnalysisWindow(QDialog):
             self.split_checkbox.show()
         self._split_available = True
 
+        # Всегда обновляем комбинированный вид в основном окне
+        self._ensure_main_axes()
+        self._update_plot(
+            self._last_series_x,
+            self._last_series_q,
+            self._last_series_sigma,
+            self._last_series_k,
+        )
+        # Если раздельное окно активно — обновляем и его
         if self.split_checkbox.isChecked():
-            self._show_split_plots(self._last_series_x, self._last_series_q, self._last_series_sigma, self._last_series_k)
-        else:
-            # гарантируем 3 оси и обновляем
-            self._ensure_main_axes()
-            self._update_plot(self._last_series_x, self._last_series_q, self._last_series_sigma, self._last_series_k)
+            try:
+                self._open_or_update_split_window(
+                    self._last_series_x,
+                    self._last_series_q,
+                    self._last_series_sigma,
+                    self._last_series_k,
+                )
+            except Exception:
+                pass
         self.run_btn.hide()
 
     def _on_split_toggled(self, checked: bool) -> None:
-        # Переключение между раздельными графиками (в диалоге) и общими тремя графиками
+        # Переключение отдельного окна раздельных графиков
         if not self._split_available:
             return
-        # Если нет данных, ничего не делаем
-        if not (self._last_series_x or self._last_series_q or self._last_series_sigma or self._last_series_k):
-            return
         if checked:
-            self._show_split_plots(self._last_series_x, self._last_series_q, self._last_series_sigma, self._last_series_k)
+            if not (
+                self._last_series_x
+                or self._last_series_q
+                or self._last_series_sigma
+                or self._last_series_k
+            ):
+                # Если данных нет, но обе таблицы утверждены — пробуем пересчитать
+                if self._cold_locked and self._hot_locked:
+                    self.recalculate()
+                    return
+                else:
+                    return
+            self._open_or_update_split_window(
+                self._last_series_x,
+                self._last_series_q,
+                self._last_series_sigma,
+                self._last_series_k,
+            )
         else:
-            # Возвращаемся к 3 основным графикам в текущем окне
-            self._ensure_main_axes()
-            self._update_plot(self._last_series_x, self._last_series_q, self._last_series_sigma, self._last_series_k)
+            # Закрыть доп окно, если открыто
+            try:
+                sw = getattr(self, "_split_window", None)
+                if sw is not None:
+                    sw.close()
+                    self._split_window = None
+            except Exception:
+                pass
 
     def _build_scenarios(
         self,
@@ -623,71 +695,26 @@ class AnalysisWindow(QDialog):
         self.fig.tight_layout()
         self.canvas.draw_idle()
 
-    def _show_split_plots(
+    def _open_or_update_split_window(
         self,
         series_x: Dict[str, List[float]],
         series_q: Dict[str, List[float]],
         series_sigma: Dict[str, List[float]],
         series_k: Dict[str, List[float]],
     ) -> None:
-        # Inline rendering: replace 3 main axes with grid rows per component
-        try:
-            labels = [lbl for lbl in sorted(series_x.keys()) if series_x.get(lbl)]
-            n = len(labels)
-            if n == 0:
-                self._ensure_main_axes()
-                self._update_plot(series_x, series_q, series_sigma, series_k)
-                return
-            # Clear figure and build grid n x 3
-            self.fig.clear()
-            for row, label in enumerate(labels, start=1):
-                xs = series_x.get(label, [])
-                qs = series_q.get(label, [])
-                sg = series_sigma.get(label, [])
-                ks = series_k.get(label, [])
-                ax1 = self.fig.add_subplot(n, 3, (row - 1) * 3 + 1)
-                ax2 = self.fig.add_subplot(n, 3, (row - 1) * 3 + 2)
-                ax3 = self.fig.add_subplot(n, 3, (row - 1) * 3 + 3)
-                if xs and qs:
-                    ax1.plot(xs, qs, marker="o", linestyle="-", color="#1f77b4")
-                ax1.set_title(f"{label} — Q (кВт)")
-                ax1.set_xlabel("Доля компонента")
-                ax1.grid(True, linestyle=":", alpha=0.4)
-
-                if xs and sg:
-                    ax2.plot(xs, sg, marker="o", linestyle="-", color="#d62728")
-                ax2.set_title(f"{label} — σ (кВт/К)")
-                ax2.set_xlabel("Доля компонента")
-                ax2.grid(True, linestyle=":", alpha=0.4)
-
-                if xs and ks:
-                    ax3.plot(xs, ks, marker="o", linestyle="-", color="#2ca02c")
-                ax3.set_title(f"{label} — K (кВт/К)")
-                ax3.set_xlabel("Доля компонента")
-                ax3.grid(True, linestyle=":", alpha=0.4)
-
-            self.fig.tight_layout()
-            self.canvas.draw_idle()
-
-            # Auto-resize window based on number of rows, but keep within screen bounds
+        # Создать окно при необходимости
+        if getattr(self, "_split_window", None) is None:
+            self._split_window = _SplitPlotsWindow(self)
+            # Позиционирование окна сбоку от текущего
             try:
-                base_h = 800
-                per_row_extra = 320
-                target_h = base_h + per_row_extra * max(0, n - 1)
-                scr = self.screen()
-                avail = scr.availableGeometry()
-                avail_w = avail.width()
-                avail_h = avail.height()
-                target_h = min(int(target_h), max(600, avail_h - 60))
-                # keep width within screen as well
-                target_w = min(max(self.width(), 1100), max(900, avail_w - 40))
-                self.resize(target_w, target_h)
+                self._split_window.position_next_to(self)
             except Exception:
                 pass
-        except Exception:
-            # Fallback to the combined plot
-            self._ensure_main_axes()
-            self._update_plot(series_x, series_q, series_sigma, series_k)
+            self._split_window.show()
+        # Обновить наполнение
+        sw = getattr(self, "_split_window", None)
+        if sw is not None:
+            sw.update_plots(series_x, series_q, series_sigma, series_k)
 
     def _set_table_editable(self, table: QTableWidget, editable: bool):
         for r in range(table.rowCount()):
@@ -703,7 +730,7 @@ class AnalysisWindow(QDialog):
     def _fmt_num(self, x: float, decimals: int = 6) -> str:
         try:
             s = f"{float(x):.{decimals}f}"
-            s = s.rstrip('0').rstrip('.')
+            s = s.rstrip("0").rstrip(".")
             return s if s else "0"
         except Exception:
             return str(x)
@@ -715,7 +742,7 @@ class AnalysisWindow(QDialog):
                 it = table.item(r, 1)
                 if not it:
                     continue
-                v = float(it.text().replace(',', '.'))
+                v = float(it.text().replace(",", "."))
                 total += max(0.0, v)
         except Exception:
             pass
@@ -746,7 +773,7 @@ class AnalysisWindow(QDialog):
         # parse current value
         txt = it.text() or ""
         try:
-            val = float(txt.replace(',', '.')) if txt else 0.0
+            val = float(txt.replace(",", ".")) if txt else 0.0
             if val < 0:
                 val = 0.0
         except Exception:
@@ -755,7 +782,7 @@ class AnalysisWindow(QDialog):
         new_val = min(max(0.0, val), 1.0)
         # write back if clamped or normalization/formatting differs
         new_txt = self._fmt_num(new_val)
-        if abs(new_val - val) > 1e-12 or (txt and ',' in txt) or (txt != new_txt):
+        if abs(new_val - val) > 1e-12 or (txt and "," in txt) or (txt != new_txt):
             try:
                 self._block_item_slot = True
                 it.setText(new_txt)
@@ -778,6 +805,22 @@ class AnalysisWindow(QDialog):
                 if it:
                     it.setForeground(brush)
         table.viewport().update()
+
+    def _set_group_highlight(self, which: str, mode: str) -> None:
+        """Подсветка группбокса таблицы: editing -> жёлтый, approved -> зелёный, other -> сброс."""
+        gb = self.cold_group if which == "cold" else self.hot_group
+        if mode == "editing":
+            gb.setStyleSheet(
+                "QGroupBox { background-color: #fff3cd; border: 1px solid #e0a800; border-radius: 4px; margin-top: 6px; }"
+                "QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 3px; }"
+            )
+        elif mode == "approved":
+            gb.setStyleSheet(
+                "QGroupBox { background-color: #d4edda; border: 1px solid #28a745; border-radius: 4px; margin-top: 6px; }"
+                "QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 3px; }"
+            )
+        else:
+            gb.setStyleSheet("")
 
     def _apply_table(self, table: QTableWidget, which: str):
         # validate sum of shares == 1
@@ -807,6 +850,11 @@ class AnalysisWindow(QDialog):
         else:
             self._hot_locked = True
         self._set_table_locked_visual(table, True)
+        # зелёная подсветка после утверждения
+        try:
+            self._set_group_highlight(which, "approved")
+        except Exception:
+            pass
         self._read_tables()
         # Enable and show run button only if both locked
         can_show = self._cold_locked and self._hot_locked
@@ -827,22 +875,19 @@ class AnalysisWindow(QDialog):
             self._cold_locked = False
         else:
             self._hot_locked = False
+        # жёлтая подсветка при редактировании
+        try:
+            self._set_group_highlight(which, "editing")
+        except Exception:
+            pass
         # Кнопка остаётся видимой
         try:
             self.run_btn.show()
             self.run_btn.setEnabled(True)
         except Exception:
             pass
-        # Скрываем разделение до следующего построения и сбрасываем состояние
-        try:
-            if hasattr(self, "split_container"):
-                self.split_container.hide()
-            else:
-                self.split_checkbox.hide()
-            self.split_checkbox.setChecked(False)
-            self._split_available = False
-        except Exception:
-            pass
+        # Оставляем переключатель и окно раздельных графиков доступными
+        # (обновятся после следующего пересчета)
         # Остановить мигание и вернуть базовый стиль
         self._blink_timer.stop()
         self._blink_on = False
@@ -854,7 +899,25 @@ class AnalysisWindow(QDialog):
         self._ensure_main_axes()
         try:
             if self._last_series_x:
-                self._update_plot(self._last_series_x, self._last_series_q, self._last_series_sigma, self._last_series_k)
+                self._update_plot(
+                    self._last_series_x,
+                    self._last_series_q,
+                    self._last_series_sigma,
+                    self._last_series_k,
+                )
+                # И обновим окно раздельных графиков, если активно
+                if self.split_checkbox.isChecked():
+                    try:
+                        sw = getattr(self, "_split_window", None)
+                        if sw is not None:
+                            sw.update_plots(
+                            self._last_series_x,
+                            self._last_series_q,
+                            self._last_series_sigma,
+                            self._last_series_k,
+                        )
+                    except Exception:
+                        pass
         except Exception:
             pass
 
@@ -863,6 +926,130 @@ class AnalysisWindow(QDialog):
         self._blink_timer.stop()
         self._blink_on = False
         self.run_btn.setStyleSheet(self._blink_base_style)
+
+    def _on_destroyed(self) -> None:
+        # При уничтожении окна анализа закрыть и окно раздельных графиков
+        try:
+            sw = getattr(self, "_split_window", None)
+            if sw is not None:
+                sw.close()
+                self._split_window = None
+        except Exception:
+            pass
+
+
+class _SplitPlotsWindow(QDialog):
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Графики по компонентам")
+        # Немодальное отдельное окно
+        self.setModal(False)
+        self.setWindowModality(Qt.NonModal)
+        self.setWindowFlags(self.windowFlags() | Qt.Window)
+        self.setAttribute(Qt.WA_DeleteOnClose, True)
+
+        v = QVBoxLayout(self)
+        self.fig = Figure(figsize=(10, 6))
+        self.canvas = FigureCanvas(self.fig)
+        self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        v.addWidget(self.canvas)
+
+    def closeEvent(self, event):  # type: ignore[override]
+        # Сообщаем родителю, что окно закрыто — сброс чекбокса, но оставляем возможность открыть снова
+        try:
+            parent = self.parent()
+            if isinstance(parent, AnalysisWindow):
+                # Сбрасываем чекбокс, но не ломаем логику пересчета
+                try:
+                    parent.split_checkbox.blockSignals(True)
+                    parent.split_checkbox.setChecked(False)
+                finally:
+                    parent.split_checkbox.blockSignals(False)
+                # через публичный путь
+                setattr(parent, "_split_window", None)
+        except Exception:
+            pass
+        try:
+            super().closeEvent(event)  # type: ignore[arg-type]
+        except Exception:
+            pass
+
+    def position_next_to(self, anchor: QWidget) -> None:
+        try:
+            ag = anchor.frameGeometry()
+            scr = anchor.screen()
+            avail = scr.availableGeometry()
+            w = max(900, min(1100, avail.width() // 2))
+            h = min( max(600, anchor.height()), avail.height() - 40 )
+            # сначала пробуем справа
+            x_right = ag.x() + ag.width() + 10
+            x = x_right
+            y = ag.y()
+            # если не помещается справа — открываем слева
+            if x + w > avail.x() + avail.width():
+                x_left = ag.x() - w - 10
+                if x_left >= avail.x():
+                    x = x_left
+                else:
+                    # fallback: прижаться к правому краю экрана
+                    x = avail.x() + avail.width() - w - 10
+            # вертикальные рамки
+            if y + h > avail.y() + avail.height():
+                y = max(avail.y(), avail.y() + avail.height() - h - 10)
+            self.setGeometry(x, y, w, h)
+        except Exception:
+            pass
+
+    def update_plots(
+        self,
+        series_x: Dict[str, List[float]],
+        series_q: Dict[str, List[float]],
+        series_sigma: Dict[str, List[float]],
+        series_k: Dict[str, List[float]],
+    ) -> None:
+        try:
+            labels = [lbl for lbl in sorted(series_x.keys()) if series_x.get(lbl)]
+            n = len(labels)
+            self.fig.clear()
+            if n == 0:
+                self.canvas.draw_idle()
+                return
+            for row, label in enumerate(labels, start=1):
+                xs = series_x.get(label, [])
+                qs = series_q.get(label, [])
+                sg = series_sigma.get(label, [])
+                ks = series_k.get(label, [])
+                ax1 = self.fig.add_subplot(n, 3, (row - 1) * 3 + 1)
+                ax2 = self.fig.add_subplot(n, 3, (row - 1) * 3 + 2)
+                ax3 = self.fig.add_subplot(n, 3, (row - 1) * 3 + 3)
+                if xs and qs:
+                    ax1.plot(xs, qs, marker="o", linestyle="-", color="#1f77b4")
+                ax1.set_title(f"{label} — Q (кВт)")
+                ax1.set_xlabel("Доля компонента")
+                ax1.grid(True, linestyle=":", alpha=0.4)
+
+                if xs and sg:
+                    ax2.plot(xs, sg, marker="o", linestyle="-", color="#d62728")
+                ax2.set_title(f"{label} — σ (кВт/К)")
+                ax2.set_xlabel("Доля компонента")
+                ax2.grid(True, linestyle=":", alpha=0.4)
+
+                if xs and ks:
+                    ax3.plot(xs, ks, marker="o", linestyle="-", color="#2ca02c")
+                ax3.set_title(f"{label} — K (кВт/К)")
+                ax3.set_xlabel("Доля компонента")
+                ax3.grid(True, linestyle=":", alpha=0.4)
+
+            self.fig.tight_layout()
+            self.canvas.draw_idle()
+        except Exception:
+            try:
+                self.fig.clear()
+                self.canvas.draw_idle()
+            except Exception:
+                pass
+
+    
 
 
 class _Share01Delegate(QStyledItemDelegate):
@@ -878,5 +1065,6 @@ class _Share01Delegate(QStyledItemDelegate):
             editor.setPlaceholderText("0..1")
             return editor
         return super().createEditor(parent, option, index)
+
 
 __all__ = ["AnalysisWindow"]
