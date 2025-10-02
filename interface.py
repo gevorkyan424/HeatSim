@@ -17,10 +17,14 @@ from PyQt5.QtCore import (
     Qt,
     QRegularExpression,
     QObject,
-    QEvent,
-    QModelIndex,
     QSortFilterProxyModel,
     QTimer,
+    # QProcess,
+    QSettings,
+    QCoreApplication,
+    QEvent,
+    QModelIndex,
+    QTranslator,
 )
 from PyQt5.QtWidgets import (
     QMainWindow,
@@ -42,6 +46,7 @@ from PyQt5.QtWidgets import (
     QTableView,
     QFrame,
     QAction,
+    QActionGroup,
     QFileDialog,
     QTextEdit,
     QDialog,
@@ -129,6 +134,67 @@ COMPONENT_DB: Dict[str, Tuple[float, float, float, float]] = {
     "R32 (дифторметан)": (221.40, 1.77, 0.87, 238.0),
     "R22 (хлордифторметан)": (232.35, 1.31, 0.68, 233.0),
 }
+
+# Отображаемые английские названия компонентов для режима English (UI)
+COMPONENT_NAME_EN: Dict[str, str] = {
+    "Вода": "Water",
+    "Ртуть": "Mercury",
+    "Этанол": "Ethanol",
+    "Азот": "Nitrogen",
+    "Пропан": "Propane",
+    "Бутан": "Butane",
+    "Бензин": "Gasoline",
+    "Глицерин": "Glycerin",
+    "Фенол": "Phenol",
+    "Водород": "Hydrogen",
+    "Этиловый спирт": "Ethyl alcohol",
+    "Свинец": "Lead",
+    "Аммиак": "Ammonia",
+    "Медь": "Copper",
+    "Железо": "Iron",
+    "Алюминий": "Aluminium",
+    "Литий": "Lithium",
+    "Графит": "Graphite",
+    "Диэтиловый эфир": "Diethyl ether",
+    "Бериллий": "Beryllium",
+    "Бор": "Boron",
+    "Сера": "Sulfur",
+    "Серная кислота": "Sulfuric acid",
+    "Натрий": "Sodium",
+    "Калий": "Potassium",
+    "Хлор": "Chlorine",
+    "Йод": "Iodine",
+    "Магний": "Magnesium",
+    "Кальций": "Calcium",
+    "Цинк": "Zinc",
+    "Олово": "Tin",
+    "Платина": "Platinum",
+    "Никель": "Nickel",
+    "Бензол": "Benzene",
+    "Толуол": "Toluene",
+    "Спирт": "Alcohol",
+    "Метанол": "Methanol",
+    "Изопропанол": "Isopropanol",
+    "Ацетон": "Acetone",
+    "Циклогексан": "Cyclohexane",
+    "Гексан (n-Hexane)": "n-Hexane",
+    "Гептан (n-Heptane)": "n-Heptane",
+    "Октан (n-Octane)": "n-Octane",
+    "Пентан (n-Pentane)": "n-Pentane",
+    "Изобутан": "Isobutane",
+    "Пропилен (Пропен)": "Propylene (Propene)",
+    "Метан": "Methane",
+    "Этан": "Ethane",
+    "Этен (Этилен)": "Ethene (Ethylene)",
+    "Кислород": "Oxygen",
+    "Аргон": "Argon",
+    "Этиленгликоль": "Ethylene glycol",
+    "Пропиленгликоль": "Propylene glycol",
+    "R134a (1,1,1,2-ТФЭ)": "R134a (1,1,1,2-Tetrafluoroethane)",
+    "R32 (дифторметан)": "R32 (Difluoromethane)",
+    "R22 (хлордифторметан)": "R22 (Chlorodifluoromethane)",
+}
+COMPONENT_NAME_RU_FROM_EN: Dict[str, str] = {v: k for k, v in COMPONENT_NAME_EN.items()}
 
 # ---- Импорт/экспорт базы компонентов ----
 DATA_DIR = Path(os.path.dirname(os.path.abspath(__file__))) / "data"
@@ -613,6 +679,8 @@ class CalcResult(TypedDict, total=False):
 # ===================== ПАНЕЛЬ ПОТОКОВ =====================
 class FlowPanel:
     def __init__(self, title: str, sign: str):
+        self._title_ru = title
+        self._sign = sign
         self.box = QGroupBox(title)
         grid = QGridLayout(self.box)
         self.t_in = num_edit()
@@ -627,13 +695,13 @@ class FlowPanel:
         self.p_lock = lock_button_for(self.p)
 
         row = 0
-        grid.addWidget(
-            QLabel(
-                f"Температура на входе ({title.lower()}), T<sub>{sign}</sub><sup>in</sup> [ K ]"
-            ),
-            row,
-            0,
+        self.lbl_t_in = QLabel(
+            QCoreApplication.translate(
+                "FlowPanel",
+                "Температура на входе ({part}), T{sub} [ K ]",
+            ).format(part=title.lower(), sub=f"<sub>{sign}</sub><sup>in</sup>")
         )
+        grid.addWidget(self.lbl_t_in, row, 0)
         h0 = QHBoxLayout()
         h0.setContentsMargins(0, 0, 0, 0)
         h0.addWidget(self.t_in)
@@ -641,13 +709,13 @@ class FlowPanel:
         grid.addLayout(h0, row, 1)
 
         row += 1
-        grid.addWidget(
-            QLabel(
-                f"Температура на выходе ({title.lower()}), T<sub>{sign}</sub><sup>out</sup> [ K ]"
-            ),
-            row,
-            0,
+        self.lbl_t_out = QLabel(
+            QCoreApplication.translate(
+                "FlowPanel",
+                "Температура на выходе ({part}), T{sub} [ K ]",
+            ).format(part=title.lower(), sub=f"<sub>{sign}</sub><sup>out</sup>")
         )
+        grid.addWidget(self.lbl_t_out, row, 0)
         h1 = QHBoxLayout()
         h1.setContentsMargins(0, 0, 0, 0)
         h1.addWidget(self.t_out)
@@ -655,11 +723,13 @@ class FlowPanel:
         grid.addLayout(h1, row, 1)
 
         row += 1
-        grid.addWidget(
-            QLabel(f"Расход потока ({title.lower()}), g<sub>{sign}</sub> [ кг/сек ]"),
-            row,
-            0,
+        self.lbl_m = QLabel(
+            QCoreApplication.translate(
+                "FlowPanel",
+                "Расход потока ({part}), g{sub} [ кг/сек ]",
+            ).format(part=title.lower(), sub=f"<sub>{sign}</sub>")
         )
+        grid.addWidget(self.lbl_m, row, 0)
         h2 = QHBoxLayout()
         h2.setContentsMargins(0, 0, 0, 0)
         h2.addWidget(self.m)
@@ -667,9 +737,13 @@ class FlowPanel:
         grid.addLayout(h2, row, 1)
 
         row += 1
-        grid.addWidget(
-            QLabel(f"Давление ({title.lower()}), P<sub>{sign}</sub> [ кг/м² ]"), row, 0
+        self.lbl_p = QLabel(
+            QCoreApplication.translate(
+                "FlowPanel",
+                "Давление ({part}), P{sub} [ кг/м² ]",
+            ).format(part=title.lower(), sub=f"<sub>{sign}</sub>")
         )
+        grid.addWidget(self.lbl_p, row, 0)
         h3 = QHBoxLayout()
         h3.setContentsMargins(0, 0, 0, 0)
         h3.addWidget(self.p)
@@ -704,6 +778,59 @@ class FlowPanel:
             }
         )
 
+    def _localized_titles(self, lang: str) -> tuple[str, str]:
+        lang = (lang or "ru").lower()
+        if lang.startswith("en"):
+            part = "hot flow" if self._sign == "+" else "cold flow"
+            title = "Hot flow" if self._sign == "+" else "Cold flow"
+            return title, part
+        return self._title_ru, self._title_ru.lower()
+
+    def retranslate_panel(self, lang: str) -> None:
+        try:
+            title, part = self._localized_titles(lang)
+            self.box.setTitle(title)
+            if str(lang or "").lower().startswith("en"):
+                self.lbl_t_in.setText(
+                    f"Inlet temperature ({part}), T<sub>{self._sign}</sub><sup>in</sup> [ K ]"
+                )
+                self.lbl_t_out.setText(
+                    f"Outlet temperature ({part}), T<sub>{self._sign}</sub><sup>out</sup> [ K ]"
+                )
+                self.lbl_m.setText(
+                    f"Flow rate ({part}), g<sub>{self._sign}</sub> [ kg/s ]"
+                )
+                self.lbl_p.setText(
+                    f"Pressure ({part}), P<sub>{self._sign}</sub> [ kg/m² ]"
+                )
+            else:
+                self.lbl_t_in.setText(
+                    QCoreApplication.translate(
+                        "FlowPanel",
+                        "Температура на входе ({part}), T{sub} [ K ]",
+                    ).format(part=part, sub=f"<sub>{self._sign}</sub><sup>in</sup>")
+                )
+                self.lbl_t_out.setText(
+                    QCoreApplication.translate(
+                        "FlowPanel",
+                        "Температура на выходе ({part}), T{sub} [ K ]",
+                    ).format(part=part, sub=f"<sub>{self._sign}</sub><sup>out</sup>")
+                )
+                self.lbl_m.setText(
+                    QCoreApplication.translate(
+                        "FlowPanel",
+                        "Расход потока ({part}), g{sub} [ кг/сек ]",
+                    ).format(part=part, sub=f"<sub>{self._sign}</sub>")
+                )
+                self.lbl_p.setText(
+                    QCoreApplication.translate(
+                        "FlowPanel",
+                        "Давление ({part}), P{sub} [ кг/м² ]",
+                    ).format(part=part, sub=f"<sub>{self._sign}</sub>")
+                )
+        except Exception:
+            pass
+
 
 # ===================== DELETE FILTER =====================
 class KeyDeleteFilter(QObject):
@@ -737,7 +864,25 @@ class MixModel(QStandardItemModel):
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(0, 6, parent)
         for i, h in enumerate(self.HEADERS):
-            self.setHeaderData(i, Qt.Horizontal, h, role=Qt.DisplayRole)
+            self.setHeaderData(
+                i,
+                Qt.Horizontal,
+                QCoreApplication.translate("MixModel", h),
+                role=Qt.DisplayRole,
+            )
+
+    def retranslate_headers(self) -> None:
+        """Переустанавливает заголовки столбцов с учётом активного переводчика."""
+        for i, h in enumerate(self.HEADERS):
+            try:
+                self.setHeaderData(
+                    i,
+                    Qt.Horizontal,
+                    QCoreApplication.translate("MixModel", h),
+                    role=Qt.DisplayRole,
+                )
+            except Exception:
+                pass
 
     def _num_item(self, value: float) -> QStandardItem:
         it = QStandardItem(f"{value:.6g}")
@@ -817,8 +962,14 @@ class MixModel(QStandardItemModel):
 class MixPanel:
     def __init__(self, title: str, is_hot: bool, export_path: str):
         self.is_hot = is_hot
+        # сохранить русское название части потока для локализации заголовка
+        self._title_ru = title
         self.export_path = export_path
-        self.box = QGroupBox(f"Смесь компонентов {title.lower()}")
+        self.box = QGroupBox(
+            QCoreApplication.translate("MixPanel", "Смесь компонентов {part}").format(
+                part=title.lower()
+            )
+        )
         self.box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         v = QVBoxLayout(self.box)
 
@@ -827,23 +978,25 @@ class MixPanel:
         top.setContentsMargins(0, 0, 0, 0)
         top.setSpacing(6)
         self.comp = QComboBox()
-        self.comp.addItems(sorted(COMPONENT_DB.keys()))
+        self._populate_component_combo()
         self.comp.setFixedWidth(300)
         self.comp.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.share = num_edit(fixed_width=100)
         self.share.editingFinished.connect(self.validate_share_max1)
         self.sum_field = num_edit(read_only=True, fixed_width=100)
         self.sum_field.setText("0.0")
-        self.add_btn = QPushButton("Добавить")
+        self.add_btn = QPushButton(self.box.tr("Добавить"))
         top.addWidget(self.comp)
         top.addStretch(1)
-        top.addWidget(QLabel("Доля"))
+        self.lbl_share = QLabel(self.box.tr("Доля"))
+        top.addWidget(self.lbl_share)
         top.addWidget(self.share)
         top.addSpacing(8)
         # Перестановка: сначала кнопка Добавить, затем поле суммы
         top.addWidget(self.add_btn)
         top.addSpacing(8)
-        top.addWidget(QLabel("Сумма"))
+        self.lbl_sum = QLabel(self.box.tr("Сумма"))
+        top.addWidget(self.lbl_sum)
         top.addWidget(self.sum_field)
         v.addLayout(top)
 
@@ -853,9 +1006,9 @@ class MixPanel:
         src.setSpacing(8)
         self.rb_group = QButtonGroup(self.box)
         self.rb_db = QRadioButton(
-            "Взять параметры из справочника NIST Chemistry WebBook"
+            self.box.tr("Взять параметры из справочника NIST Chemistry WebBook")
         )
-        self.rb_manual = QRadioButton("Ввести параметры вручную")
+        self.rb_manual = QRadioButton(self.box.tr("Ввести параметры вручную"))
         self.rb_group.addButton(self.rb_db, 0)
         self.rb_group.addButton(self.rb_manual, 1)
         self.rb_db.setChecked(True)
@@ -872,16 +1025,24 @@ class MixPanel:
         self.cf = num_edit(read_only=True)
         self.cp = num_edit(read_only=True)
         self.rf = num_edit(read_only=True)
-        grid.addWidget(QLabel("Температура кипения, Tb  [ K ]"), 0, 0)
+        self.lbl_tb = QLabel(self.box.tr("Температура кипения, Tb  [ K ]"))
+        grid.addWidget(self.lbl_tb, 0, 0)
         grid.addWidget(self.tb, 0, 1)
+        self.lbl_cf = QLabel(self.box.tr("Удельная теплоёмкость жидкости, C_f  [ кДж/кг·K ]"))
         grid.addWidget(
-            QLabel("Удельная теплоёмкость жидкости, C_f  [ кДж/кг·K ]"), 1, 0
+            self.lbl_cf,
+            1,
+            0,
         )
         grid.addWidget(self.cf, 1, 1)
-        grid.addWidget(QLabel("Удельная теплоёмкость пара, C_p  [ кДж/кг·K ]"), 2, 0)
+        self.lbl_cp = QLabel(self.box.tr("Удельная теплоёмкость пара, C_p  [ кДж/кг·K ]"))
+        grid.addWidget(self.lbl_cp, 2, 0)
         grid.addWidget(self.cp, 2, 1)
+        self.lbl_rf = QLabel(self.box.tr("Скрытая теплота фазового перехода, r_f  [ кДж/кг ]"))
         grid.addWidget(
-            QLabel("Скрытая теплота фазового перехода, r_f  [ кДж/кг ]"), 3, 0
+            self.lbl_rf,
+            3,
+            0,
         )
         grid.addWidget(self.rf, 3, 1)
         v.addLayout(grid)
@@ -933,8 +1094,8 @@ class MixPanel:
         # сигналы
         self.add_btn.clicked.connect(self.on_add)
         self.rb_db.toggled.connect(self.on_mode_change)
-        self.comp.currentTextChanged.connect(self.fill_from_db)
-        self.fill_from_db(self.comp.currentText())
+        self.comp.currentIndexChanged.connect(lambda _ix: self.fill_from_db(self._current_component_key()))  # type: ignore
+        self.fill_from_db(self._current_component_key())
 
         # ensure these fields don't carry stale _lock_btn attributes
         for w in (self.share, self.tb, self.cf, self.cp, self.rf, self.sum_field):
@@ -944,25 +1105,59 @@ class MixPanel:
         self.update_share_hint()
         self._resort()
 
+    def _localized_title(self, lang: str) -> str:
+        lang = (lang or "ru").lower()
+        if lang.startswith("en"):
+            part = "hot flow" if self.is_hot else "cold flow"
+            return f"Component mixture ({part})"
+        return QCoreApplication.translate(
+            "MixPanel", "Смесь компонентов {part}"
+        ).format(part=self._title_ru.lower())
+
+    def retranslate_panel(self, lang: str) -> None:
+        """Обновить надписи панели смеси при смене языка на лету."""
+        try:
+            self.box.setTitle(self._localized_title(lang))
+            if lang.lower().startswith("en"):
+                self.add_btn.setText("Add")
+                self.lbl_share.setText("Share")
+                self.lbl_sum.setText("Sum")
+                self.rb_db.setText("Use parameters from NIST Chemistry WebBook")
+                self.rb_manual.setText("Enter parameters manually")
+                self.lbl_tb.setText("Boiling temperature, Tb [K]")
+                self.lbl_cf.setText("Specific heat (liquid), C_f [kJ/kg·K]")
+                self.lbl_cp.setText("Specific heat (vapor), C_p [kJ/kg·K]")
+                self.lbl_rf.setText("Latent heat of phase change, r_f [kJ/kg]")
+            else:
+                self.add_btn.setText(self.box.tr("Добавить"))
+                self.lbl_share.setText(self.box.tr("Доля"))
+                self.lbl_sum.setText(self.box.tr("Сумма"))
+                self.rb_db.setText(
+                    self.box.tr("Взять параметры из справочника NIST Chemistry WebBook")
+                )
+                self.rb_manual.setText(self.box.tr("Ввести параметры вручную"))
+                self.lbl_tb.setText(self.box.tr("Температура кипения, Tb  [ K ]"))
+                self.lbl_cf.setText(
+                    self.box.tr("Удельная теплоёмкость жидкости, C_f  [ кДж/кг·K ]")
+                )
+                self.lbl_cp.setText(
+                    self.box.tr("Удельная теплоёмкость пара, C_p  [ кДж/кг·K ]")
+                )
+                self.lbl_rf.setText(
+                    self.box.tr("Скрытая теплота фазового перехода, r_f  [ кДж/кг ]")
+                )
+        except Exception:
+            pass
+
     def widget(self) -> QGroupBox:
         return self.box
 
     def refresh_component_list(self) -> None:
-        current = self.comp.currentText()
-        self.comp.blockSignals(True)
-        self.comp.clear()
-        self.comp.addItems(sorted(COMPONENT_DB.keys()))
-        # восстановить выбор, если есть
-        idx = self.comp.findText(current)
-        if idx >= 0:
-            self.comp.setCurrentIndex(idx)
-        else:
-            if self.comp.count() > 0:
-                self.comp.setCurrentIndex(0)
-        self.comp.blockSignals(False)
+        current_key = self._current_component_key()
+        self._populate_component_combo(preserve_key=current_key)
         # обновить поля параметров (если режим DB)
         if self.rb_db.isChecked():
-            self.fill_from_db(self.comp.currentText())
+            self.fill_from_db(self._current_component_key())
 
     # сортировка по Tb автоматически
     def _resort(self) -> None:
@@ -981,12 +1176,12 @@ class MixPanel:
                 wr = csv.writer(f, delimiter=";")
                 wr.writerow(
                     [
-                        "Компонент",
-                        "Доля",
-                        "Tb, K",
-                        "C_f, кДж/кг·K",
-                        "C_p, кДж/кг·K",
-                        "r_f, кДж/кг",
+                        self.box.tr("Компонент"),
+                        self.box.tr("Доля"),
+                        self.box.tr("Tb, K"),
+                        self.box.tr("C_f, кДж/кг·K"),
+                        self.box.tr("C_p, кДж/кг·K"),
+                        self.box.tr("r_f, кДж/кг"),
                     ]
                 )
                 for r in range(self.model.rowCount()):
@@ -1033,7 +1228,7 @@ class MixPanel:
         for w in (self.tb, self.cf, self.cp, self.rf):
             set_enabled(w, manual)
         if self.rb_db.isChecked():
-            self.fill_from_db(self.comp.currentText())
+            self.fill_from_db(self._current_component_key())
 
         try:
             if manual:
@@ -1050,6 +1245,7 @@ class MixPanel:
             pass
 
     def fill_from_db(self, name: str) -> None:
+        # name ожидается как русский ключ
         props = COMPONENT_DB.get(name)
         if props:
             tb, cf, cp, rf = props
@@ -1061,13 +1257,73 @@ class MixPanel:
             for w in (self.tb, self.cf, self.cp, self.rf):
                 w.setText("0.0")
 
+    def _is_lang_en(self) -> bool:
+        try:
+            app_inst = QApplication.instance()
+            active_lang = (
+                str(getattr(app_inst, "_app_translator_lang", "") or "").lower()
+                if app_inst is not None
+                else ""
+            )
+            desired = str(QSettings().value("ui/language", "ru") or "ru").lower()
+            return desired == "en" or active_lang.startswith("en")
+        except Exception:
+            return False
+
+    def _current_component_key(self) -> str:
+        try:
+            ru = self.comp.currentData()
+            if isinstance(ru, str) and ru in COMPONENT_DB:
+                return ru
+        except Exception:
+            pass
+        try:
+            disp = self.comp.currentText()
+            if disp in COMPONENT_DB:
+                return disp
+            if disp in COMPONENT_NAME_RU_FROM_EN:
+                return COMPONENT_NAME_RU_FROM_EN[disp]
+        except Exception:
+            pass
+        # fallback: первый ключ
+        try:
+            return next(iter(sorted(COMPONENT_DB.keys())))
+        except Exception:
+            return ""
+
+    def _populate_component_combo(self, preserve_key: Optional[str] = None) -> None:
+        try:
+            en = self._is_lang_en()
+            self.comp.blockSignals(True)
+            self.comp.clear()
+            for ru_name in sorted(COMPONENT_DB.keys()):
+                disp = COMPONENT_NAME_EN.get(ru_name, ru_name) if en else ru_name
+                self.comp.addItem(disp, ru_name)
+            # восстановить выбор
+            key = preserve_key or (
+                self.comp.itemData(0) if self.comp.count() > 0 else None
+            )
+            if isinstance(key, str):
+                idx = self.comp.findData(key)
+                if idx >= 0:
+                    self.comp.setCurrentIndex(idx)
+                elif self.comp.count() > 0:
+                    self.comp.setCurrentIndex(0)
+        except Exception:
+            pass
+        finally:
+            try:
+                self.comp.blockSignals(False)
+            except Exception:
+                pass
+
     def validate_share_max1(self) -> None:
         val = to_float(self.share.text())
         if val > 1.0:
             QMessageBox.warning(
                 self.box,
-                "Доля",
-                "Доля компонента не может превышать 1. Повторите ввод.",
+                self.box.tr("Доля"),
+                self.box.tr("Доля компонента не может превышать 1. Повторите ввод."),
             )
             self.share.clear()
             self.share.setFocus()
@@ -1085,20 +1341,28 @@ class MixPanel:
             self.share.setFocus()
             return
         if share_val <= 0.0:
-            QMessageBox.warning(self.box, "Доля", "Введите положительную долю > 0.")
+            QMessageBox.warning(
+                self.box,
+                self.box.tr("Доля"),
+                self.box.tr("Введите положительную долю > 0."),
+            )
             return
         if share_val > remaining + 1e-12:
             if remaining <= 0.0:
                 QMessageBox.warning(
-                    self.box, "Сумма долей", "Сумма долей уже равна 1.0."
+                    self.box,
+                    self.box.tr("Сумма долей"),
+                    self.box.tr("Сумма долей уже равна 1.0."),
                 )
                 return
             share_val = remaining
             self.share.setText(f"{share_val:.5f}")
-
-        name = self.comp.currentText()
+        # Всегда используем русский ключ для доступа к БД, а отображаемое имя — по активному языку
+        ru_key = self._current_component_key()
+        en_mode = self._is_lang_en()
+        display_name = COMPONENT_NAME_EN.get(ru_key, ru_key) if en_mode else ru_key
         if self.rb_db.isChecked():
-            tb, cf, cp, rf = COMPONENT_DB[name]
+            tb, cf, cp, rf = COMPONENT_DB.get(ru_key, (0.0, 0.0, 0.0, 0.0))
         else:
             tb, cf, cp, rf = (
                 to_float(self.tb.text()),
@@ -1106,16 +1370,16 @@ class MixPanel:
                 to_float(self.cp.text()),
                 to_float(self.rf.text()),
             )
-        self.model.add_or_update(name, share_val, tb, cf, cp, rf)
+        self.model.add_or_update(display_name, share_val, tb, cf, cp, rf)
         self.share.clear()
 
     def ask_delete(self, count: int) -> bool:
         box = QMessageBox(self.box)
         box.setIcon(QMessageBox.Question)
-        box.setWindowTitle("Удаление")
-        box.setText(f"Удалить {count} строку(и)?")
-        yes_btn = box.addButton("Да", QMessageBox.AcceptRole)
-        no_btn = box.addButton("Нет", QMessageBox.RejectRole)
+        box.setWindowTitle(self.box.tr("Удаление"))
+        box.setText(self.box.tr("Удалить {n} строку(и)?").format(n=count))
+        yes_btn = box.addButton(self.box.tr("Да"), QMessageBox.AcceptRole)
+        no_btn = box.addButton(self.box.tr("Нет"), QMessageBox.RejectRole)
         box.setDefaultButton(no_btn)  # по умолчанию Нет
         box.exec_()
         return box.clickedButton() is yes_btn
@@ -1131,7 +1395,9 @@ class MixPanel:
         rows = self.selected_source_rows()
         if not rows:
             QMessageBox.information(
-                self.box, "Удаление", "Выберите строку(и) для удаления."
+                self.box,
+                self.box.tr("Удаление"),
+                self.box.tr("Выберите строку(и) для удаления."),
             )
             return
         if not self.ask_delete(len(rows)):
@@ -1179,11 +1445,11 @@ class HydroPanel(QGroupBox):
         root.setStretch(0, 0)
         root.setStretch(1, 0)
 
-        self.rb_mix_mix = QRadioButton("Смешение - смешение")
-        self.rb_parallel = QRadioButton("Вытеснение - вытеснение (прямоток)")
-        self.rb_mix_cold = QRadioButton("Смешение (хол.) - вытеснение (гор.)")
-        self.rb_mix_hot = QRadioButton("Смешение (гор.) - вытеснение (хол.)")
-        self.rb_counter = QRadioButton("Вытеснение - вытеснение (противоток)")
+        self.rb_mix_mix = QRadioButton(self.tr("Смешение - смешение"))
+        self.rb_parallel = QRadioButton(self.tr("Вытеснение - вытеснение (прямоток)"))
+        self.rb_mix_cold = QRadioButton(self.tr("Смешение (хол.) - вытеснение (гор.)"))
+        self.rb_mix_hot = QRadioButton(self.tr("Смешение (гор.) - вытеснение (хол.)"))
+        self.rb_counter = QRadioButton(self.tr("Вытеснение - вытеснение (противоток)"))
         for rb in (
             self.rb_mix_mix,
             self.rb_parallel,
@@ -1231,6 +1497,25 @@ class HydroPanel(QGroupBox):
         self.rb_mix_mix.setChecked(True)
         self._set_mode("mix_mix")
 
+    def retranslate_panel(self, lang: str) -> None:
+        try:
+            if lang.startswith("en"):
+                self.setTitle("Flow hydrodynamics")
+                self.rb_mix_mix.setText("Mixing - mixing")
+                self.rb_parallel.setText("Displacement - displacement (cocurrent)")
+                self.rb_mix_cold.setText("Mixing (cold) - displacement (hot)")
+                self.rb_mix_hot.setText("Mixing (hot) - displacement (cold)")
+                self.rb_counter.setText("Displacement - displacement (countercurrent)")
+            else:
+                self.setTitle(self.tr("Гидродинамика потоков"))
+                self.rb_mix_mix.setText(self.tr("Смешение - смешение"))
+                self.rb_parallel.setText(self.tr("Вытеснение - вытеснение (прямоток)"))
+                self.rb_mix_cold.setText(self.tr("Смешение (хол.) - вытеснение (гор.)"))
+                self.rb_mix_hot.setText(self.tr("Смешение (гор.) - вытеснение (хол.)"))
+                self.rb_counter.setText(self.tr("Вытеснение - вытеснение (противоток)"))
+        except Exception:
+            pass
+
     def current_schema(self) -> str:
         """Возвращает идентификатор схемы (Schema1..Schema5) согласно выбранной радиокнопке."""
         if self.rb_mix_mix.isChecked():
@@ -1248,7 +1533,7 @@ class HydroPanel(QGroupBox):
     def _set_mode(self, key: str) -> None:
         pix = QPixmap(self._images.get(key, ""))
         if pix.isNull():
-            self.image_label.setText("Нет изображения")
+            self.image_label.setText(self.tr("Нет изображения"))
             self.image_label.setPixmap(QPixmap())
             return
         self.image_label.setPixmap(
@@ -1274,7 +1559,10 @@ class HydroPanel(QGroupBox):
 # ===================== ПАНЕЛЬ ВЫХОДНЫХ ПАРАМЕТРОВ =====================
 class OutputPanel(QGroupBox):
     def __init__(self, parent: Optional[QWidget] = None):
-        super().__init__("Параметры теплообменника", parent)
+        super().__init__(
+            QCoreApplication.translate("OutputPanel", "Параметры теплообменника"),
+            parent,
+        )
         # Расширяемая по ширине, фиксированная по высоте
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         g = QGridLayout(self)
@@ -1287,15 +1575,18 @@ class OutputPanel(QGroupBox):
         set_enabled(self.sigma, False)
         self.k.setText("0.0")
         set_enabled(self.k, False)
-        g.addWidget(QLabel("Тепловая нагрузка, Q [кВт]"), 0, 0)
+        self.lbl_q = QLabel(self.tr("Тепловая нагрузка, Q [кВт]"))
+        g.addWidget(self.lbl_q, 0, 0)
         hq = QHBoxLayout()
         hq.setContentsMargins(0, 0, 0, 0)
         hq.addWidget(self.q)
         hq.addWidget(self.q_lock)
         g.addLayout(hq, 0, 1)
-        g.addWidget(QLabel("Производство энтропии, σ [кВт/К]"), 1, 0)
+        self.lbl_sigma = QLabel(self.tr("Производство энтропии, σ [кВт/К]"))
+        g.addWidget(self.lbl_sigma, 1, 0)
         g.addWidget(self.sigma, 1, 1)
-        g.addWidget(QLabel("Коэффициент теплопередачи, K [кВт/К]"), 2, 0)
+        self.lbl_k = QLabel(self.tr("Коэффициент теплопередачи, K [кВт/К]"))
+        g.addWidget(self.lbl_k, 2, 0)
         g.addWidget(self.k, 2, 1)
         # Removed schema_label (schema info now only in status bar)
         # remove stale lock attributes if any
@@ -1319,10 +1610,25 @@ class OutputPanel(QGroupBox):
 
     # schema label removed
 
+    def retranslate_panel(self, lang: str) -> None:
+        try:
+            if lang.startswith("en"):
+                self.setTitle("Heat exchanger parameters")
+                self.lbl_q.setText("Heat load, Q [kW]")
+                self.lbl_sigma.setText("Entropy production, σ [kW/K]")
+                self.lbl_k.setText("Heat transfer coefficient, K [kW/K]")
+            else:
+                self.setTitle(self.tr("Параметры теплообменника"))
+                self.lbl_q.setText(self.tr("Тепловая нагрузка, Q [кВт]"))
+                self.lbl_sigma.setText(self.tr("Производство энтропии, σ [кВт/К]"))
+                self.lbl_k.setText(self.tr("Коэффициент теплопередачи, K [кВт/К]"))
+        except Exception:
+            pass
+
 
 # ===================== ГЛАВНОЕ ОКНО =====================
 class MainWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self, initial_theme: str = "system", initial_language: str = "ru"):
         super().__init__()
         # flag to indicate we are currently importing data (suppress full on_calc triggers)
         self._importing = False
@@ -1330,7 +1636,7 @@ class MainWindow(QMainWindow):
         self._suppress_full_calc_after_import = False
         # track changes after import to show recalc button
         self._post_import_changed = False
-        self.setWindowTitle("Двухпоточный теплообмен")
+        self.setWindowTitle(self.tr("Двухпоточный теплообмен"))
         # Сделаем окно ресайзабельным: установим минимальный размер
         # и стартовый размер. Высоту уменьшаем на 50px (с 1025 до 975).
         self.setMinimumSize(1600, 975)
@@ -1356,7 +1662,7 @@ class MainWindow(QMainWindow):
         # статусная строка
         self.status = self.statusBar()
         try:
-            self.status.showMessage("Готово")
+            self.status.showMessage(self.tr("Готово"))
         except Exception:
             pass
         # флаг: было ли явное нажатие кнопки Вычислить после последнего изменения схемы/сброса
@@ -1365,50 +1671,108 @@ class MainWindow(QMainWindow):
 
         # File menu: Import/Export inputs (JSON)
         try:
-            file_menu = self.menuBar().addMenu("Файл")
-            imp_act = QAction("Импорт входных данных...", self)
-            exp_act = QAction("Экспорт входных данных...", self)
-            imp_xlsx = QAction("Импорт из Excel (.xlsx)...", self)
-            exp_xlsx = QAction("Экспорт в Excel (.xlsx)...", self)
-            # Component DB actions
-            act_imp_db = QAction("Импорт базы компонентов (Excel)...", self)
+            # Язык интерфейса зафиксирован на русском
+
+            self.file_menu = self.menuBar().addMenu(self.tr("Файл"))
+            self.act_imp_inputs = QAction(self.tr("Импорт входных данных..."), self)
+            self.act_exp_inputs = QAction(self.tr("Экспорт входных данных..."), self)
+            self.act_imp_inputs_xlsx = QAction(
+                self.tr("Импорт из Excel (.xlsx)..."), self
+            )
+            self.act_exp_inputs_xlsx = QAction(
+                self.tr("Экспорт в Excel (.xlsx)..."), self
+            )
+            # Действия с базой компонентов
+            self.act_imp_db = QAction(
+                self.tr("Импорт базы компонентов (Excel)..."), self
+            )
             # Убрали CSV-экспорт базы компонентов, оставляем только Excel-экспорт
-            act_exp_db_xlsx = QAction("Экспорт базы компонентов (Excel)...", self)
-            file_menu.addAction(imp_act)
-            file_menu.addAction(exp_act)
-            file_menu.addAction(imp_xlsx)
-            file_menu.addAction(exp_xlsx)
-            file_menu.addSeparator()
-            file_menu.addAction(act_imp_db)
-            file_menu.addAction(act_exp_db_xlsx)
+            self.act_exp_db_xlsx = QAction(
+                self.tr("Экспорт базы компонентов (Excel)..."), self
+            )
+            self.file_menu.addAction(self.act_imp_inputs)
+            self.file_menu.addAction(self.act_exp_inputs)
+            self.file_menu.addAction(self.act_imp_inputs_xlsx)
+            self.file_menu.addAction(self.act_exp_inputs_xlsx)
+            self.file_menu.addSeparator()
+            self.file_menu.addAction(self.act_imp_db)
+            self.file_menu.addAction(self.act_exp_db_xlsx)
 
             # Меню "Вид"
-            view_menu = self.menuBar().addMenu("Вид")
-            act_reset_view = QAction("Сбросить вид (по умолчанию)", self)
-            view_menu.addAction(act_reset_view)
-            imp_act.triggered.connect(self.import_inputs)  # type: ignore[call-arg]
-            exp_act.triggered.connect(self.export_inputs)  # type: ignore[call-arg]
-            imp_xlsx.triggered.connect(self.import_inputs_xlsx)  # type: ignore[call-arg]
-            exp_xlsx.triggered.connect(self.export_inputs_xlsx)  # type: ignore[call-arg]
-            act_imp_db.triggered.connect(self.import_component_db_xlsx)  # type: ignore[call-arg]
-            act_exp_db_xlsx.triggered.connect(self.export_component_db_xlsx)  # type: ignore[call-arg]
+            self.view_menu = self.menuBar().addMenu(self.tr("Вид"))
+            self.act_reset_view = QAction(self.tr("Сбросить вид (по умолчанию)"), self)
+            self.view_menu.addAction(self.act_reset_view)
+            # --- Тема ---
+            self.theme_menu = self.view_menu.addMenu(self.tr("Тема"))
+            self._theme_group = QActionGroup(self)
+            self._theme_group.setExclusive(True)
+            self._act_theme_light = QAction(self.tr("Светлая"), self)
+            self._act_theme_light.setCheckable(True)
+            self._act_theme_dark = QAction(self.tr("Тёмная"), self)
+            self._act_theme_dark.setCheckable(True)
+            self._act_theme_system = QAction(self.tr("Системная"), self)
+            self._act_theme_system.setCheckable(True)
+            for a in (
+                self._act_theme_light,
+                self._act_theme_dark,
+                self._act_theme_system,
+            ):
+                self._theme_group.addAction(a)
+                self.theme_menu.addAction(a)
+            # --- Язык ---
+            self.lang_menu = self.view_menu.addMenu(self.tr("Язык"))
+            self._lang_group = QActionGroup(self)
+            self._lang_group.setExclusive(True)
+            self._act_lang_ru = QAction(self.tr("Русский"), self)
+            self._act_lang_ru.setCheckable(True)
+            self._act_lang_en = QAction(self.tr("English"), self)
+            self._act_lang_en.setCheckable(True)
+            for a in (self._act_lang_ru, self._act_lang_en):
+                self._lang_group.addAction(a)
+                self.lang_menu.addAction(a)
+            self._act_lang_ru.triggered.connect(
+                lambda: self._on_language_selected("ru")
+            )
+            self._act_lang_en.triggered.connect(
+                lambda: self._on_language_selected("en")
+            )
+            self.act_imp_inputs.triggered.connect(self.import_inputs)  # type: ignore[call-arg]
+            self.act_exp_inputs.triggered.connect(self.export_inputs)  # type: ignore[call-arg]
+            self.act_imp_inputs_xlsx.triggered.connect(self.import_inputs_xlsx)  # type: ignore[call-arg]
+            self.act_exp_inputs_xlsx.triggered.connect(self.export_inputs_xlsx)  # type: ignore[call-arg]
+            self.act_imp_db.triggered.connect(self.import_component_db_xlsx)  # type: ignore[call-arg]
+            self.act_exp_db_xlsx.triggered.connect(self.export_component_db_xlsx)  # type: ignore[call-arg]
             # --- Меню помощи ---
-            help_menu = self.menuBar().addMenu("Помощь")
-            act_help = QAction("Справка", self)
-            act_logs = QAction("Логи", self)
-            act_about = QAction("О программе", self)
-            act_license = QAction("Лицензионное соглашение", self)
-            help_menu.addAction(act_help)
-            help_menu.addAction(act_logs)
-            help_menu.addSeparator()
-            # Add license as a submenu item under Help
-            help_menu.addAction(act_license)
-            help_menu.addAction(act_about)
-            act_help.triggered.connect(self.show_help_dialog)
-            act_logs.triggered.connect(self.show_logs_dialog)
-            act_license.triggered.connect(self.show_license_dialog)
-            act_about.triggered.connect(self.show_about_dialog)
-            act_reset_view.triggered.connect(self.reset_view)
+            self.help_menu = self.menuBar().addMenu(self.tr("Помощь"))
+            self.act_help = QAction(self.tr("Справка"), self)
+            self.act_logs = QAction(self.tr("Логи"), self)
+            self.act_about = QAction(self.tr("О программе"), self)
+            self.act_license = QAction(self.tr("Лицензионное соглашение"), self)
+            self.help_menu.addAction(self.act_help)
+            self.help_menu.addAction(self.act_logs)
+            self.help_menu.addSeparator()
+            self.help_menu.addAction(self.act_license)
+            self.help_menu.addAction(self.act_about)
+            self.act_help.triggered.connect(self.show_help_dialog)
+            self.act_logs.triggered.connect(self.show_logs_dialog)
+            self.act_license.triggered.connect(self.show_license_dialog)
+            self.act_about.triggered.connect(self.show_about_dialog)
+            self.act_reset_view.triggered.connect(self.reset_view)
+            # обработчики темы (языка нет)
+            self._act_theme_light.triggered.connect(
+                lambda: self._on_theme_selected("light")
+            )
+            self._act_theme_dark.triggered.connect(
+                lambda: self._on_theme_selected("dark")
+            )
+            self._act_theme_system.triggered.connect(
+                lambda: self._on_theme_selected("system")
+            )
+            # Применим заголовки главного меню согласно выбранному языку
+            try:
+                self._apply_menu_language(initial_language)
+            except Exception:
+                pass
         except Exception as e:
             logger.exception("Ошибка создания меню: %s", e)
 
@@ -1476,14 +1840,15 @@ class MainWindow(QMainWindow):
         btns = QVBoxLayout()
         btns.setContentsMargins(0, 0, 0, 0)
         btns.setSpacing(8)
-        self.calc_btn = QPushButton("Вычислить")
-        self.reset_btn = QPushButton("Очистить параметры")
+        # Кнопки справа (язык интерфейса зафиксирован на русском)
+        self.calc_btn = QPushButton(self.tr("Вычислить"))
+        self.reset_btn = QPushButton(self.tr("Очистить параметры"))
         self.calc_btn.setMinimumHeight(36)
         self.reset_btn.setMinimumHeight(36)
-        self.analysis_btn = QPushButton("Провести анализ")
+        self.analysis_btn = QPushButton(self.tr("Провести анализ"))
         self.analysis_btn.setToolTip("Провести анализ изменяя доли компонентов потоков")
         self.analysis_btn.setMinimumHeight(36)
-        self.recalc_btn = QPushButton("Перерасчёт")
+        self.recalc_btn = QPushButton(self.tr("Перерасчёт"))
         self.recalc_btn.setToolTip("Пересчитать после изменений")
         self.recalc_btn.setMinimumHeight(36)
         self.recalc_btn.hide()
@@ -1644,6 +2009,347 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
+        # --- Применяем начальные тема/язык ---
+        try:
+            self._init_theme_language(initial_theme, initial_language)
+        except Exception:
+            pass
+
+        # Применим переводы к элементам UI при старте, чтобы покрыть случаи неполного .qm
+        try:
+            lang0 = (initial_language or "ru").lower()
+            # меню
+            try:
+                self._apply_menu_language(lang0)
+            except Exception:
+                pass
+            # списки компонентов + панели
+            try:
+                self.cold_mix.refresh_component_list()
+                self.hot_mix.refresh_component_list()
+            except Exception:
+                pass
+            try:
+                if lang0.startswith("en"):
+                    self.setWindowTitle("Two-stream heat exchanger")
+                else:
+                    self.setWindowTitle(self.tr("Двухпоточный теплообмен"))
+            except Exception:
+                pass
+            try:
+                self.cold_panel.retranslate_panel(lang0)
+                self.hot_panel.retranslate_panel(lang0)
+            except Exception:
+                pass
+            try:
+                self.hydro.retranslate_panel(lang0)
+            except Exception:
+                pass
+            try:
+                self.out_panel.retranslate_panel(lang0)
+            except Exception:
+                pass
+            try:
+                self.cold_mix.retranslate_panel(lang0)
+                self.hot_mix.retranslate_panel(lang0)
+            except Exception:
+                pass
+            # Заголовки таблиц
+            try:
+                self.cold_mix.model.retranslate_headers()
+                self.hot_mix.model.retranslate_headers()
+            except Exception:
+                pass
+            # Кнопки справа
+            try:
+                if lang0.startswith("en"):
+                    self.calc_btn.setText("Calculate")
+                    self.reset_btn.setText("Clear parameters")
+                    self.analysis_btn.setText("Run analysis")
+                    self.analysis_btn.setToolTip("Run analysis by varying component shares")
+                    self.recalc_btn.setText("Recalculate")
+                    self.recalc_btn.setToolTip("Recalculate after changes")
+                else:
+                    self.calc_btn.setText(self.tr("Вычислить"))
+                    self.reset_btn.setText(self.tr("Очистить параметры"))
+                    self.analysis_btn.setText(self.tr("Провести анализ"))
+                    self.analysis_btn.setToolTip(self.tr("Провести анализ изменяя доли компонентов потоков"))
+                    self.recalc_btn.setText(self.tr("Перерасчёт"))
+                    self.recalc_btn.setToolTip(self.tr("Пересчитать после изменений"))
+            except Exception:
+                pass
+            # Текст статус-бара
+            try:
+                if lang0.startswith("en"):
+                    self.status.showMessage("Ready")
+                else:
+                    self.status.showMessage(self.tr("Готово"))
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    # ============== Тема и язык ==============
+    def _init_theme_language(self, theme: str, lang: str) -> None:
+        # Тема
+        theme = (theme or "system").lower()
+        if theme not in ("light", "dark", "system"):
+            theme = "system"
+        self.apply_theme(theme)
+        if theme == "light":
+            self._act_theme_light.setChecked(True)
+        elif theme == "dark":
+            self._act_theme_dark.setChecked(True)
+        else:
+            self._act_theme_system.setChecked(True)
+        # Язык — отмечаем текущий выбор
+        try:
+            lang_norm = (lang or "ru").lower()
+            if lang_norm.startswith("en"):
+                try:
+                    self._act_lang_en.setChecked(True)
+                except Exception:
+                    pass
+            else:
+                try:
+                    self._act_lang_ru.setChecked(True)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    def _apply_menu_language(self, lang: str) -> None:
+        """Применить язык к заголовкам главного меню без использования Qt-переводчика."""
+        lang_norm = (lang or "ru").lower()
+        try:
+            self.file_menu.setTitle(
+                "File" if lang_norm.startswith("en") else self.tr("Файл")
+            )
+        except Exception:
+            pass
+        # Пункты File
+        try:
+            if lang_norm.startswith("en"):
+                self.act_imp_inputs.setText("Import inputs…")
+                self.act_exp_inputs.setText("Export inputs…")
+                self.act_imp_inputs_xlsx.setText("Import from Excel (.xlsx)…")
+                self.act_exp_inputs_xlsx.setText("Export to Excel (.xlsx)…")
+                self.act_imp_db.setText("Import component DB (Excel)…")
+                self.act_exp_db_xlsx.setText("Export component DB (Excel)…")
+            else:
+                self.act_imp_inputs.setText(self.tr("Импорт входных данных..."))
+                self.act_exp_inputs.setText(self.tr("Экспорт входных данных..."))
+                self.act_imp_inputs_xlsx.setText(self.tr("Импорт из Excel (.xlsx)..."))
+                self.act_exp_inputs_xlsx.setText(self.tr("Экспорт в Excel (.xlsx)..."))
+                self.act_imp_db.setText(self.tr("Импорт базы компонентов (Excel)..."))
+                self.act_exp_db_xlsx.setText(
+                    self.tr("Экспорт базы компонентов (Excel)...")
+                )
+        except Exception:
+            pass
+        try:
+            self.view_menu.setTitle(
+                "View" if lang_norm.startswith("en") else self.tr("Вид")
+            )
+        except Exception:
+            pass
+        # Пункты View
+        try:
+            self.theme_menu.setTitle(
+                "Theme" if lang_norm.startswith("en") else self.tr("Тема")
+            )
+            self.lang_menu.setTitle(
+                "Language" if lang_norm.startswith("en") else self.tr("Язык")
+            )
+            if lang_norm.startswith("en"):
+                self.act_reset_view.setText("Reset view (defaults)")
+                self._act_theme_light.setText("Light")
+                self._act_theme_dark.setText("Dark")
+                self._act_theme_system.setText("System")
+                self._act_lang_ru.setText("Russian")
+                self._act_lang_en.setText("English")
+            else:
+                self.act_reset_view.setText(self.tr("Сбросить вид (по умолчанию)"))
+                self._act_theme_light.setText(self.tr("Светлая"))
+                self._act_theme_dark.setText(self.tr("Тёмная"))
+                self._act_theme_system.setText(self.tr("Системная"))
+                self._act_lang_ru.setText(self.tr("Русский"))
+                self._act_lang_en.setText(self.tr("English"))
+        except Exception:
+            pass
+        try:
+            self.help_menu.setTitle(
+                "Help" if lang_norm.startswith("en") else self.tr("Помощь")
+            )
+        except Exception:
+            pass
+        # Пункты Help
+        try:
+            if lang_norm.startswith("en"):
+                self.act_help.setText("Help")
+                self.act_logs.setText("Logs")
+                self.act_license.setText("License Agreement")
+                self.act_about.setText("About")
+            else:
+                self.act_help.setText(self.tr("Справка"))
+                self.act_logs.setText(self.tr("Логи"))
+                self.act_license.setText(self.tr("Лицензионное соглашение"))
+                self.act_about.setText(self.tr("О программе"))
+        except Exception:
+            pass
+
+    def _on_theme_selected(self, theme: str) -> None:
+        try:
+            self.apply_theme(theme)
+            settings = QSettings()
+            settings.setValue("ui/theme", theme)
+        except Exception:
+            pass
+
+    def apply_theme(self, theme: str) -> None:
+        app_inst = QApplication.instance()
+        if app_inst is None:
+            return
+        app = cast(QApplication, app_inst)
+        theme = (theme or "system").lower()
+        # Базовый стиль для жирных заголовков групп
+        base_group_qss = "QGroupBox { font-weight: 700; }"
+        if theme == "dark":
+            dark_qss = """
+                QWidget { background-color: #121212; color: #e0e0e0; }
+                QGroupBox { border: 1px solid #333; margin-top: 8px; }
+                QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top left; padding: 0 3px; }
+                QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QTextEdit, QPlainTextEdit { background-color: #1e1e1e; color: #e0e0e0; border: 1px solid #444; selection-background-color: #3d6ea1; selection-color: #ffffff; }
+                QTableView { background-color: #1e1e1e; gridline-color: #333; alternate-background-color: #151515; }
+                QHeaderView::section { background-color: #2a2a2a; color: #e0e0e0; border: 1px solid #444; }
+                QPushButton { background-color: #2a2a2a; color: #e0e0e0; border: 1px solid #444; padding: 4px 8px; }
+                QPushButton:hover { background-color: #333333; }
+                QPushButton:pressed { background-color: #3a3a3a; }
+                QMenuBar { background-color: #1e1e1e; }
+                QMenuBar::item:selected { background-color: #333333; }
+                QMenu { background-color: #1e1e1e; color: #e0e0e0; }
+                QMenu::item:selected { background-color: #333333; }
+                QCheckBox, QRadioButton { background: transparent; }
+                """
+            app.setStyleSheet(dark_qss + base_group_qss)
+            self._current_theme = "dark"
+        elif theme == "light":
+            # Светлая тема: системная палитра + наш базовый стиль
+            app.setStyleSheet(base_group_qss)
+            self._current_theme = "light"
+        else:
+            # Системная: сбрасываем кастомный стиль кроме жирных заголовков
+            app.setStyleSheet(base_group_qss)
+            self._current_theme = "system"
+
+    def _on_language_selected(self, lang: str) -> None:
+        try:
+            lang = (lang or "ru").lower()
+            settings = QSettings()
+            settings.setValue("ui/language", lang)
+            try:
+                settings.sync()
+            except Exception:
+                pass
+            # Установим/снимем переводчик на лету
+            translator_applied = False
+            try:
+                translator_applied = self._apply_qtranslator_runtime(lang)
+            except Exception:
+                translator_applied = False
+            # Мгновенно обновим заголовки главного меню
+            try:
+                self._apply_menu_language(lang)
+            except Exception:
+                pass
+            # Обновим отображение списков компонентов под выбранный язык
+            try:
+                self.cold_mix.refresh_component_list()
+                self.hot_mix.refresh_component_list()
+            except Exception:
+                pass
+            # Обновим заголовок окна и панели
+            try:
+                if lang.startswith("en"):
+                    self.setWindowTitle("Two-stream heat exchanger")
+                else:
+                    self.setWindowTitle(self.tr("Двухпоточный теплообмен"))
+            except Exception:
+                pass
+            try:
+                if hasattr(self, "cold_panel"):
+                    self.cold_panel.retranslate_panel(lang)  # type: ignore[attr-defined]
+                if hasattr(self, "hot_panel"):
+                    self.hot_panel.retranslate_panel(lang)  # type: ignore[attr-defined]
+            except Exception:
+                pass
+            try:
+                if hasattr(self, "hydro"):
+                    self.hydro.retranslate_panel(lang)  # type: ignore[attr-defined]
+            except Exception:
+                pass
+            try:
+                if hasattr(self, "out_panel"):
+                    self.out_panel.retranslate_panel(lang)  # type: ignore[attr-defined]
+            except Exception:
+                pass
+            # Обновим панели смесей
+            try:
+                if hasattr(self, "cold_mix"):
+                    self.cold_mix.retranslate_panel(lang)  # type: ignore[attr-defined]
+                if hasattr(self, "hot_mix"):
+                    self.hot_mix.retranslate_panel(lang)  # type: ignore[attr-defined]
+            except Exception:
+                pass
+            # Обновим заголовки таблиц.
+            try:
+                self.cold_mix.model.retranslate_headers()
+                self.hot_mix.model.retranslate_headers()
+            except Exception:
+                pass
+            # Обновим статус-бар (короткое сообщение)
+            try:
+                if lang.startswith("en"):
+                    self.status.showMessage("Ready")
+                else:
+                    self.status.showMessage(self.tr("Готово"))
+            except Exception:
+                pass
+            # Кнопки справа (основные действия)
+            try:
+                if lang.startswith("en"):
+                    self.calc_btn.setText("Calculate")
+                    self.reset_btn.setText("Clear parameters")
+                    self.analysis_btn.setText("Run analysis")
+                    self.analysis_btn.setToolTip("Run analysis by varying component shares")
+                    self.recalc_btn.setText("Recalculate")
+                    self.recalc_btn.setToolTip("Recalculate after changes")
+                else:
+                    self.calc_btn.setText(self.tr("Вычислить"))
+                    self.reset_btn.setText(self.tr("Очистить параметры"))
+                    self.analysis_btn.setText(self.tr("Провести анализ"))
+                    self.analysis_btn.setToolTip(self.tr("Провести анализ изменяя доли компонентов потоков"))
+                    self.recalc_btn.setText(self.tr("Перерасчёт"))
+                    self.recalc_btn.setToolTip(self.tr("Пересчитать после изменений"))
+            except Exception:
+                pass
+            # Если .qm отсутствует — предупредим пользователя (без перезапуска)
+            if not translator_applied and lang.startswith("en"):
+                try:
+                    base_dir = os.path.dirname(os.path.abspath(__file__))
+                    qm_path = os.path.join(base_dir, "i18n", f"HeatSim_{lang}.qm")
+                    QMessageBox.information(
+                        self,
+                        self.tr("Смена языка"),
+                        self.tr(
+                            "Файл перевода не найден: {p}\nЧасть интерфейса переключена на английский, полная локализация станет доступна после добавления .qm."
+                        ).format(p=qm_path),
+                    )
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
     def _on_mix_changed(self, *args: Any) -> None:
         """Handler for mix model changes: update calc button and attempt minimal auto-calc."""
         try:
@@ -1675,6 +2381,42 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
+    def _apply_qtranslator_runtime(self, lang: str) -> bool:
+        """Устанавливает или снимает переводчик на лету. Возвращает True, если переводчик применён."""
+        app_inst = QApplication.instance()
+        if app_inst is None:
+            return False
+        app = cast(QApplication, app_inst)
+        # Снимем предыдущий, если был
+        try:
+            prev = getattr(app, "_app_translator", None)
+            if prev is not None:
+                app.removeTranslator(prev)
+        except Exception:
+            pass
+        lang = (lang or "ru").lower()
+        if not lang.startswith("en"):
+            try:
+                setattr(app, "_app_translator", None)
+                setattr(app, "_app_translator_lang", "")
+            except Exception:
+                pass
+            return True
+        try:
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            qm_path = os.path.join(base_dir, "i18n", f"HeatSim_{lang}.qm")
+            if not os.path.exists(qm_path):
+                return False
+            tr = QTranslator()
+            if not tr.load(qm_path):
+                return False
+            app.installTranslator(tr)
+            setattr(app, "_app_translator", tr)
+            setattr(app, "_app_translator_lang", str(lang))
+            return True
+        except Exception:
+            return False
+
     def _on_calc_button_clicked(self) -> None:
         """Handler for explicit user click on Calculate: clear import suppression and run full calculation."""
         try:
@@ -1698,7 +2440,9 @@ class MainWindow(QMainWindow):
                 except Exception:
                     pass
                 try:
-                    self.status.showMessage("Вычисления выполнены успешно", 4000)
+                    self.status.showMessage(
+                        self.tr("Вычисления выполнены успешно"), 4000
+                    )
                 except Exception:
                     pass
         except Exception:
@@ -2605,10 +3349,14 @@ class MainWindow(QMainWindow):
         if (not q_text) and (not t_out_text):
             QMessageBox.warning(
                 self,
-                "Невозможно вычислить",
+                self.tr("Невозможно вычислить"),
                 (
-                    "σ и K не могут быть посчитаны, потому что неизвестны Q и T_out (hot).\n"
-                    "Пожалуйста, заполните Q или T_out горячего потока вручную и повторите попытку."
+                    self.tr(
+                        "σ и K не могут быть посчитаны, потому что неизвестны Q и T_out (hot).\n"
+                    )
+                    + self.tr(
+                        "Пожалуйста, заполните Q или T_out горячего потока вручную и повторите попытку."
+                    )
                 ),
             )
             return False
@@ -2645,12 +3393,11 @@ class MainWindow(QMainWindow):
                         )
                     except Exception:
                         k_val = 0.0
-                    if sigma_val:
-                        self.out_panel.sigma.setText(format_num(sigma_val))
-                        set_enabled(self.out_panel.sigma, False)
-                    if k_val:
-                        self.out_panel.k.setText(format_num(k_val))
-                        set_enabled(self.out_panel.k, False)
+                    # Обновляем значения всегда, даже если они равны 0.0, чтобы не оставались старые значения
+                    self.out_panel.sigma.setText(format_num(sigma_val))
+                    set_enabled(self.out_panel.sigma, False)
+                    self.out_panel.k.setText(format_num(k_val))
+                    set_enabled(self.out_panel.k, False)
 
                     # статус (не использовать слово "Schema" в выводе)
                     schema_display = schema
@@ -2690,22 +3437,21 @@ class MainWindow(QMainWindow):
                                     schema=schema,
                                 )
                                 ans2 = cast(Dict[str, Any], ans2)
-                                if ans2 and ans2.get("k"):
+                                if ans2 and ("k" in ans2):
                                     try:
                                         k2_val = float(ans2.get("k", 0.0) or 0.0)
                                     except Exception:
                                         k2_val = 0.0
-                                    if k2_val:
-                                        self.out_panel.k.setText(format_num(k2_val))
-                                        set_enabled(self.out_panel.k, False)
-                                        # update status with new k info
-                                        try:
-                                            k_src2 = str(ans2.get("k_source", ""))
-                                            k_show2 = k2_val
-                                            msg2 = f"{schema_display}  contact={contact or '-'}  k_source={k_src2 or '-'}  Q={q_show:.4g}  K={k_show2:.4g}  σ={s_show:.4g}"
-                                            self.status.showMessage(msg2)
-                                        except Exception:
-                                            pass
+                                    self.out_panel.k.setText(format_num(k2_val))
+                                    set_enabled(self.out_panel.k, False)
+                                    # update status with new k info
+                                    try:
+                                        k_src2 = str(ans2.get("k_source", ""))
+                                        k_show2 = k2_val
+                                        msg2 = f"{schema_display}  contact={contact or '-'}  k_source={k_src2 or '-'}  Q={q_show:.4g}  K={k_show2:.4g}  σ={s_show:.4g}"
+                                        self.status.showMessage(msg2)
+                                    except Exception:
+                                        pass
                     except Exception:
                         pass
                 if ans and "q" in ans:
@@ -2742,7 +3488,6 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.warning(self, "Ошибка расчёта", str(e))
             return False
-        return True
         return True
 
     def _auto_calc_minimal(self) -> None:
@@ -2906,7 +3651,7 @@ class MainWindow(QMainWindow):
 
             # reset status
             try:
-                self.status.showMessage("Сброшено")
+                self.status.showMessage(self.tr("Сброшено"))
             except Exception:
                 pass
             # Сброс схемы к первой и запрет автосчёта sigma/k до явного вычисления
@@ -2923,7 +3668,7 @@ class MainWindow(QMainWindow):
 
     # --- Диалоги помощи ---
     def _simple_text_dialog(
-        self, title: str, text: str, read_only: bool = True
+        self, title: str, text: str, read_only: bool = True, force_en: bool = False
     ) -> None:
         try:
             dlg = QDialog(self)
@@ -2935,6 +3680,14 @@ class MainWindow(QMainWindow):
             te.setReadOnly(read_only)
             layout.addWidget(te)
             buttons = QDialogButtonBox(QDialogButtonBox.Close)
+            # Подписываем кнопку закрытия в зависимости от языка
+            try:
+                if force_en:
+                    buttons.button(QDialogButtonBox.Close).setText("Close")
+                else:
+                    buttons.button(QDialogButtonBox.Close).setText(self.tr("Закрыть"))
+            except Exception:
+                pass
             buttons.rejected.connect(dlg.reject)
             buttons.accepted.connect(dlg.accept)
             layout.addWidget(buttons)
@@ -2943,32 +3696,118 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, title, str(e))
 
     def show_help_dialog(self) -> None:
-        help_text = (
-            "Справка по использованию программы:\n\n"
-            "1. Введите параметры холодного и горячего потоков (температуры, расход, давление).\n"
-            "2. Сформируйте смеси компонентов: выберите компонент, долю и добавьте. Сумма долей каждой смеси должна быть 1.\n"
-            "3. Выберите гидродинамическую схему.\n"
-            "4. Введите либо тепловую нагрузку Q, либо выходную температуру горячего потока T⁺out — второе значение будет рассчитано автоматически.\n"
-            "5. Нажмите 'Вычислить' для получения σ и K.\n"
-            "6. Кнопка 'Провести анализ' позволяет открыть отдельное окно для изменения долей и построения графика зависимости Q–σ.\n"
-            "7. Используйте меню 'Файл' для импорта/экспорта данных в CSV или Excel. При импорте значения не преобразуются в даты.\n"
-            "8. 'Очистить параметры' сбрасывает все поля.\n"
-        )
-        self._simple_text_dialog("Справка", help_text)
+        # Определяем, нужно ли принудительно показывать англ. текст (если выбран EN, но переводчик не загружен)
+        force_en = False
+        try:
+            app_inst = QApplication.instance()
+            active_lang = (
+                str(getattr(app_inst, "_app_translator_lang", "") or "").lower()
+                if app_inst is not None
+                else ""
+            )
+            settings = QSettings()
+            desired = str(settings.value("ui/language", "ru") or "ru").lower()
+            force_en = (desired == "en") and (not active_lang.startswith("en"))
+        except Exception:
+            force_en = False
+
+        if force_en:
+            help_text = (
+                "User guide:\n\n"
+                "1. Enter parameters for cold and hot streams (temperatures, flow rate, pressure).\n"
+                "2. Create mixtures: select a component, enter its share, and add. The sum of shares for each mixture must be 1.\n"
+                "3. Select the hydrodynamic scheme.\n"
+                "4. Enter either heat load Q or hot stream outlet temperature T⁺out — the other will be calculated automatically.\n"
+                "5. Press 'Calculate' to get σ and K.\n"
+                "6. The 'Run analysis' button opens a separate window for changing shares and plotting the Q–σ curve.\n"
+                "7. Use the 'File' menu to import/export data in CSV or Excel. Imported values are not converted to dates.\n"
+                "8. 'Clear parameters' resets all fields.\n"
+            )
+            self._simple_text_dialog("User guide", help_text, force_en=True)
+        else:
+            help_text = (
+                self.tr("Справка по использованию программы:")
+                + "\n\n"
+                + self.tr(
+                    "1. Введите параметры холодного и горячего потоков (температуры, расход, давление)."
+                )
+                + "\n"
+                + self.tr(
+                    "2. Сформируйте смеси компонентов: выберите компонент, долю и добавьте. Сумма долей каждой смеси должна быть 1."
+                )
+                + "\n"
+                + self.tr("3. Выберите гидродинамическую схему.")
+                + "\n"
+                + self.tr(
+                    "4. Введите либо тепловую нагрузку Q, либо выходную температуру горячего потока T⁺out — второе значение будет рассчитано автоматически."
+                )
+                + "\n"
+                + self.tr("5. Нажмите 'Вычислить' для получения σ и K.")
+                + "\n"
+                + self.tr(
+                    "6. Кнопка 'Провести анализ' позволяет открыть отдельное окно для изменения долей и построения графика зависимости Q–σ."
+                )
+                + "\n"
+                + self.tr(
+                    "7. Используйте меню 'Файл' для импорта/экспорта данных в CSV или Excel. При импорте значения не преобразуются в даты."
+                )
+                + "\n"
+                + self.tr("8. 'Очистить параметры' сбрасывает все поля.")
+                + "\n"
+            )
+            self._simple_text_dialog(self.tr("Справка"), help_text)
 
     def show_logs_dialog(self) -> None:
         try:
-            if not LOG_FILE.exists():
-                QMessageBox.information(self, "Логи", "Файл логов пока отсутствует.")
-                return
-            with LOG_FILE.open("r", encoding="utf-8", errors="ignore") as f:
-                content = f.read()[-100000:]
-            self._simple_text_dialog("Логи", content)
+            if LOG_FILE.exists():
+                content = LOG_FILE.read_text(encoding="utf-8", errors="ignore")
+            else:
+                content = self.tr("Логи отсутствуют.")
+            self._simple_text_dialog(self.tr("Логи"), content)
         except Exception as e:
-            QMessageBox.warning(self, "Логи", str(e))
+            QMessageBox.warning(self, self.tr("Логи"), str(e))
+
+    def show_license_dialog(self) -> None:
+        try:
+            base_dir = Path(os.path.dirname(os.path.abspath(__file__)))
+            lic_path = base_dir / "Лицензионное_соглашение.txt"
+            if not lic_path.exists():
+                QMessageBox.information(
+                    self,
+                    self.tr("Лицензионное соглашение"),
+                    self.tr("Файл лицензионного соглашения не найден."),
+                )
+                return
+            try:
+                content = lic_path.read_text(encoding="utf-8")
+            except Exception as e:
+                QMessageBox.warning(
+                    self,
+                    self.tr("Лицензионное соглашение"),
+                    self.tr("Не удалось прочитать файл: {err}").format(err=e),
+                )
+                return
+            self._simple_text_dialog(self.tr("Лицензионное соглашение"), content)
+        except Exception as e:
+            QMessageBox.warning(self, self.tr("Лицензионное соглашение"), str(e))
 
     def show_about_dialog(self) -> None:
         try:
+            # Определяем режим англ. текста при отсутствии переводчика
+            force_en = False
+            try:
+                app_inst = QApplication.instance()
+                active_lang = (
+                    str(getattr(app_inst, "_app_translator_lang", "") or "").lower()
+                    if app_inst is not None
+                    else ""
+                )
+                settings = QSettings()
+                desired = str(settings.value("ui/language", "ru") or "ru").lower()
+                force_en = (desired == "en") and (not active_lang.startswith("en"))
+            except Exception:
+                force_en = False
+
             version_path = Path(os.path.dirname(os.path.abspath(__file__))) / "VERSION"
             version = "неизвестно"
             if version_path.exists():
@@ -2979,41 +3818,29 @@ class MainWindow(QMainWindow):
             mtime = datetime.fromtimestamp(os.path.getmtime(__file__)).strftime(
                 "%Y-%m-%d %H:%M"
             )
-            text = (
-                f"Полное наименование: Программа анализа двухпоточного теплообменника\n"
-                f"Версия: {version}\n"
-                f"Дата обновления: {mtime}\n\n"
-                "Описание: Инструмент для расчёта тепловой нагрузки,\n"
-                "производства энтропии и коэффициента теплопередачи\n"
-                "в системах теплообмена с различными гидродинамическими схемами."
-            )
-            QMessageBox.information(self, "О программе", text)
-        except Exception as e:
-            QMessageBox.warning(self, "О программе", str(e))
 
-    def show_license_dialog(self) -> None:
-        try:
-            lic_path = (
-                Path(os.path.dirname(os.path.abspath(__file__)))
-                / "Лицензионное_соглашение.txt"
-            )
-            if not lic_path.exists():
-                QMessageBox.information(
-                    self,
-                    "Лицензионное соглашение",
-                    "Файл лицензионного соглашения не найден.",
+            if force_en:
+                text = (
+                    f"Full name: Two-stream heat exchanger analysis program\n"
+                    f"Version: {version}\n"
+                    f"Last update: {mtime}\n\n"
+                    "Description: Tool for calculating heat load,\n"
+                    "entropy production, and heat transfer coefficient\n"
+                    "in heat exchange systems with various hydrodynamic schemes."
                 )
-                return
-            try:
-                content = lic_path.read_text(encoding="utf-8")
-            except Exception as e:
-                QMessageBox.warning(
-                    self, "Лицензионное соглашение", f"Не удалось прочитать файл: {e}"
+                QMessageBox.information(self, "About", text)
+            else:
+                text = (
+                    f"Полное наименование: Программа анализа двухпоточного теплообменника\n"
+                    f"Версия: {version}\n"
+                    f"Дата обновления: {mtime}\n\n"
+                    "Описание: Инструмент для расчёта тепловой нагрузки,\n"
+                    "производства энтропии и коэффициента теплопередачи\n"
+                    "в системах теплообмена с различными гидродинамическими схемами."
                 )
-                return
-            self._simple_text_dialog("Лицензионное соглашение", content)
+                QMessageBox.information(self, self.tr("О программе"), text)
         except Exception as e:
-            QMessageBox.warning(self, "Лицензионное соглашение", str(e))
+            QMessageBox.warning(self, self.tr("О программе"), str(e))
 
     # --- Окно анализа ---
     def open_analysis_window(self) -> None:
@@ -3021,7 +3848,9 @@ class MainWindow(QMainWindow):
             from analysis_interface import AnalysisWindow  # type: ignore
         except Exception as e:
             QMessageBox.warning(
-                self, "Анализ", f"Не удалось импортировать окно анализа: {e}"
+                self,
+                self.tr("Анализ"),
+                self.tr("Не удалось импортировать окно анализа: {e}").format(e=e),
             )
             return
         try:
@@ -3029,44 +3858,13 @@ class MainWindow(QMainWindow):
             hot = self.hot_panel.to_dict()
             cold_mix = self.cold_mix.mix_rows()
             hot_mix = self.hot_mix.mix_rows()
-        except Exception:
-            cold = {}
-            hot = {}
-            cold_mix = []  # type: ignore
-            hot_mix = []  # type: ignore
-        # Проверим, что Q, sigma и k рассчитаны; если нет — не открываем окно анализа
-        try:
-            q_txt = self.out_panel.q.text().strip()
-            sigma_txt = self.out_panel.sigma.text().strip()
-            k_txt = self.out_panel.k.text().strip()
-
-            def _is_calculated(t: str) -> bool:
-                try:
-                    return float(t) != 0.0
-                except Exception:
-                    return False
-
-            if not q_txt or not _is_calculated(sigma_txt) or not _is_calculated(k_txt):
-                QMessageBox.warning(
-                    self,
-                    "Анализ",
-                    "Невозможно открыть анализ: сначала выполните полный расчёт (Q, σ и K должны быть рассчитаны).",
-                )
-                return
-        except Exception:
-            # в случае проблем с доступом к полям — не открываем анализ
+        except Exception as e:
             QMessageBox.warning(
-                self, "Анализ", "Невозможно открыть анализ: недоступны значения Q/σ/K."
+                self,
+                self.tr("Анализ"),
+                self.tr("Ошибка чтения входных данных: {e}").format(e=e),
             )
             return
-        try:
-            self._analysis_win  # type: ignore[attr-defined]
-            if self._analysis_win is not None and self._analysis_win.isVisible():  # type: ignore
-                self._analysis_win.raise_()  # type: ignore
-                self._analysis_win.activateWindow()  # type: ignore
-                return
-        except Exception:
-            pass
         try:
             # приведение типов для mypy/pyright
             from typing import cast as _cast, Dict as _Dict, Any as _Any, List as _List
@@ -3087,7 +3885,11 @@ class MainWindow(QMainWindow):
             )
             self._analysis_win.show()
         except Exception as e:
-            QMessageBox.warning(self, "Анализ", f"Ошибка открытия окна анализа: {e}")
+            QMessageBox.warning(
+                self,
+                self.tr("Анализ"),
+                self.tr("Ошибка открытия окна анализа: {e}").format(e=e),
+            )
 
     # ---------- ПОМЕТКА УСТАРЕВАНИЯ РЕЗУЛЬТАТОВ ----------
     def _mark_stale_results(self) -> None:
@@ -3160,7 +3962,7 @@ class MainWindow(QMainWindow):
         if not can_compute:
             try:
                 # build helpful message listing missing/invalid parts
-                parts = []
+                parts: List[str] = []
                 try:
                     if (
                         not self.out_panel.q.text().strip()
@@ -3302,10 +4104,10 @@ class MainWindow(QMainWindow):
         Used to determine whether inputs changed since last explicit calculation.
         """
         try:
-            snap = {}
+            snap: Dict[str, Any] = {}
 
             # numeric fields that affect sigma/K (ignore pressure 'p' which is not used)
-            def num_of(widget):
+            def num_of(widget: QLineEdit) -> Optional[float]:
                 try:
                     return round(float(widget.text().strip().replace(",", ".")), 6)
                 except Exception:
@@ -3321,7 +4123,9 @@ class MainWindow(QMainWindow):
             # include simple representation of mixes (shares and cf/cp) to detect significant mix changes
             try:
 
-                def norm_row(r):
+                from typing import Mapping as _Mapping
+
+                def norm_row(r: _Mapping[str, Any]) -> Dict[str, Optional[float]]:
                     try:
                         return {
                             "share": round(float(r.get("share", 0.0)), 6),
@@ -3477,7 +4281,7 @@ class MainWindow(QMainWindow):
                     self.move(max(geo.left(), x), max(geo.top(), y))
                 except Exception:
                     pass
-            self.status.showMessage("Вид сброшен к значению по умолчанию")
+            self.status.showMessage(self.tr("Вид сброшен к значению по умолчанию"))
         except Exception:
             pass
 

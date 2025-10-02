@@ -47,7 +47,7 @@ class AnalysisWindow(QDialog):
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Анализ состава смесей")
+        self.setWindowTitle(self.tr("Анализ состава смесей"))
         # Remove question mark help button
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
         # Larger, resizable window
@@ -68,8 +68,8 @@ class AnalysisWindow(QDialog):
         # Tables with per-table controls (верх)
         tables_box = QHBoxLayout()
         layout.addLayout(tables_box, 0)
-        self.cold_group = QGroupBox("Холодный поток")
-        self.hot_group = QGroupBox("Горячий поток")
+        self.cold_group = QGroupBox(self.tr("Холодный поток"))
+        self.hot_group = QGroupBox(self.tr("Горячий поток"))
         # начальная нейтральная тема
         self.cold_group.setStyleSheet("")
         self.hot_group.setStyleSheet("")
@@ -83,18 +83,18 @@ class AnalysisWindow(QDialog):
         cold_box.addWidget(self.cold_table)
         hot_box.addWidget(self.hot_table)
         # Labels showing remaining share to 1.0 for each table
-        self.cold_remaining_label = QLabel("Остаток доли: 1.000000")
-        self.hot_remaining_label = QLabel("Остаток доли: 1.000000")
+        self.cold_remaining_label = QLabel(self.tr("Остаток доли: 1.000000"))
+        self.hot_remaining_label = QLabel(self.tr("Остаток доли: 1.000000"))
         self.cold_remaining_label.setStyleSheet("color: #555;")
         self.hot_remaining_label.setStyleSheet("color: #555;")
         cold_box.addWidget(self.cold_remaining_label)
         hot_box.addWidget(self.hot_remaining_label)
 
         # Buttons under each table
-        self.cold_edit_btn = QPushButton("Редактировать")
-        self.cold_apply_btn = QPushButton("Утвердить")
-        self.hot_edit_btn = QPushButton("Редактировать")
-        self.hot_apply_btn = QPushButton("Утвердить")
+        self.cold_edit_btn = QPushButton(self.tr("Редактировать"))
+        self.cold_apply_btn = QPushButton(self.tr("Утвердить"))
+        self.hot_edit_btn = QPushButton(self.tr("Редактировать"))
+        self.hot_apply_btn = QPushButton(self.tr("Утвердить"))
         cbh = QHBoxLayout()
         cbh.addStretch(1)
         cbh.addWidget(self.cold_edit_btn)
@@ -109,12 +109,12 @@ class AnalysisWindow(QDialog):
         hot_box.addLayout(hbh)
 
         # Global recalc button (hidden until both approved)
-        self.run_btn = QPushButton("Построить графики")
+        self.run_btn = QPushButton(self.tr("Построить графики"))
         self.run_btn.hide()
         self.run_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.run_btn.setStyleSheet("background-color: gold; font-weight: bold;")
         # Чекбокс на одном уровне с кнопкой; текст сверху, галка снизу
-        self.split_label = QLabel("Разделить компоненты по графикам")
+        self.split_label = QLabel(self.tr("Разделить компоненты по графикам"))
         self.split_checkbox = QCheckBox("")
         self.split_container = QWidget()
         _sv = QVBoxLayout(self.split_container)
@@ -168,7 +168,9 @@ class AnalysisWindow(QDialog):
         self.desc_label = QPushButton()
         self.desc_label.setEnabled(False)
         self.desc_label.setText(
-            "Каждая кривая: независимый сценарий варьирования доли одного компонента от 0 до 1 с равным распределением остатка."
+            self.tr(
+                "Каждая кривая: независимый сценарий варьирования доли одного компонента от 0 до 1 с равным распределением остатка."
+            )
         )
         layout.addWidget(self.desc_label)
 
@@ -229,12 +231,12 @@ class AnalysisWindow(QDialog):
         self.ax_sigma = self.fig.add_subplot(132)
         self.ax_k = self.fig.add_subplot(133)
         for ax, title in [
-            (self.ax_q, "Q (кВт)"),
-            (self.ax_sigma, "σ (кВт/К)"),
-            (self.ax_k, "K (кВт/К)"),
+            (self.ax_q, self.tr("Q (кВт)")),
+            (self.ax_sigma, self.tr("σ (кВт/К)")),
+            (self.ax_k, self.tr("K (кВт/К)")),
         ]:
             ax.set_title(title)
-            ax.set_xlabel("Доля компонента (сценарий)")
+            ax.set_xlabel(self.tr("Доля компонента (сценарий)"))
             ax.grid(True, linestyle=":", alpha=0.5)
         self.fig.tight_layout()
         self.canvas.draw_idle()
@@ -274,7 +276,6 @@ class AnalysisWindow(QDialog):
                 )
         except Exception:
             pass
-
 
     def _toggle_blink(self) -> None:
         if not self.run_btn.isVisible():
@@ -370,7 +371,9 @@ class AnalysisWindow(QDialog):
     def recalculate(self):
         # Only run if both tables locked (approved)
         if not (self._cold_locked and self._hot_locked):
-            QMessageBox.information(self, "Анализ", "Сначала утвердите обе таблицы.")
+            QMessageBox.information(
+                self, self.tr("Анализ"), self.tr("Сначала утвердите обе таблицы.")
+            )
             return
         # read approved tables (analysis window values)
         self._read_tables()
@@ -835,7 +838,9 @@ class AnalysisWindow(QDialog):
                     raise ValueError("Отрицательная доля")
                 total += val
         except Exception:
-            QMessageBox.warning(self, "Анализ", "Некорректные значения долей.")
+            QMessageBox.warning(
+                self, self.tr("Анализ"), self.tr("Некорректные значения долей.")
+            )
             return
         if abs(total - 1.0) > 1e-6:
             QMessageBox.warning(
@@ -911,11 +916,11 @@ class AnalysisWindow(QDialog):
                         sw = getattr(self, "_split_window", None)
                         if sw is not None:
                             sw.update_plots(
-                            self._last_series_x,
-                            self._last_series_q,
-                            self._last_series_sigma,
-                            self._last_series_k,
-                        )
+                                self._last_series_x,
+                                self._last_series_q,
+                                self._last_series_sigma,
+                                self._last_series_k,
+                            )
                     except Exception:
                         pass
         except Exception:
@@ -980,7 +985,7 @@ class _SplitPlotsWindow(QDialog):
             scr = anchor.screen()
             avail = scr.availableGeometry()
             w = max(900, min(1100, avail.width() // 2))
-            h = min( max(600, anchor.height()), avail.height() - 40 )
+            h = min(max(600, anchor.height()), avail.height() - 40)
             # сначала пробуем справа
             x_right = ag.x() + ag.width() + 10
             x = x_right
@@ -1048,8 +1053,6 @@ class _SplitPlotsWindow(QDialog):
                 self.canvas.draw_idle()
             except Exception:
                 pass
-
-    
 
 
 class _Share01Delegate(QStyledItemDelegate):

@@ -6,7 +6,12 @@
   "reportMissingTypeArgument": true,
   "reportIncompatibleMethodOverride": true,
   "reportOptionalMemberAccess": true,
+  "exclude": [
+    "i18n"
+  ],
   "executionEnvironments": [
-    { "root": "." }
+    {
+      "root": "."
+    }
   ]
 }
