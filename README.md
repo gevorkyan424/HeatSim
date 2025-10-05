@@ -329,4 +329,31 @@ $pwd = Read-Host -AsSecureString "PFX password"
 - Переключение языка: верхние кнопки RU/EN справа — переключение без перезапуска. При отсутствии полного .qm включены английские фолбэки.
 - Файлы переводов (.qm) ищутся в `i18n`. Инструкции по сборке переводов: `i18n/README_i18n.md`.
 
+## Инсталлятор (Inno Setup)
+
+- Репозиторий содержит сценарий инсталляции `installer/HeatSim.iss` и скрипт сборки `build_installer.ps1`.
+- CI собирает инсталлятор автоматически и добавляет его в GitHub Release (вместе с `.sha256`), если среда сборки располагает Inno Setup (или успешно установит его).
+
+Сборка локально:
+
+```powershell
+# 1) Собрать exe
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\build_exe.ps1
+
+# 2) Установить Inno Setup (если не установлен)
+# Скачать: https://jrsoftware.org/isinfo.php и убедиться, что ISCC.exe в PATH
+
+# 3) Собрать инсталлятор
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\build_installer.ps1
+
+# Готовый файл: dist\HeatSim-Setup-v<версия>.exe
+```
+
+Проверка целостности:
+
+```powershell
+Get-FileHash -Algorithm SHA256 .\dist\HeatSim-Setup-v1.8.exe
+Get-Content .\dist\HeatSim-Setup-v1.8.exe.sha256
+```
+
 

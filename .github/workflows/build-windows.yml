@@ -49,6 +49,26 @@ jobs:
           $hash = (Get-FileHash -Algorithm SHA256 .\dist\HeatSim.exe).Hash
           "${hash}  HeatSim.exe" | Out-File -FilePath .\dist\HeatSim.exe.sha256 -Encoding ascii -NoNewline
 
+      - name: Build installer (Inno Setup)
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          # Try to install Inno Setup if not present (winget)
+          if (-not (Get-Command iscc -ErrorAction SilentlyContinue)) {
+            winget install --id JRSoftware.InnoSetup -e --source winget || Write-Warning 'Failed to install Inno Setup via winget; assuming ISCC is available on image.'
+          }
+          .\build_installer.ps1
+
+      - name: Generate SHA-256 checksum (installer)
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $ver = (Get-Content .\VERSION -Raw).Trim()
+          $setup = "dist/HeatSim-Setup-v$ver.exe"
+          if (-Not (Test-Path $setup)) { throw "Installer not found: $setup" }
+          $hash = (Get-FileHash -Algorithm SHA256 $setup).Hash
+          "${hash}  $(Split-Path -Leaf $setup)" | Out-File -FilePath "$setup.sha256" -Encoding ascii -NoNewline
+
       - name: Create GitHub Release and upload asset
         uses: softprops/action-gh-release@v2
         # On tag push, github.ref is refs/tags/<tag>; on manual run, provide inputs.tag_name
@@ -56,6 +76,9 @@ jobs:
           files: |
             dist/HeatSim.exe
             dist/HeatSim.exe.sha256
+            dist/HeatSim-Setup-v*.exe
+            dist/HeatSim-Setup-v*.exe.sha256
+          fail_on_unmatched_files: false
           name: ${{ github.ref_name != '' && github.ref_name || github.event.inputs.tag_name }}
           tag_name: ${{ github.event.inputs.tag_name }}
           generate_release_notes: true
