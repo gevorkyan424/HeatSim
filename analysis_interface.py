@@ -21,6 +21,7 @@ from PyQt5.QtWidgets import (
     QStyledItemDelegate,
     QLineEdit,
     QLabel,
+    QFileDialog,
 )
 from PyQt5.QtCore import Qt, QTimer, QRegularExpression
 from PyQt5.QtGui import QBrush, QColor, QRegularExpressionValidator
@@ -31,6 +32,9 @@ except Exception:  # fallback older name
     from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas  # type: ignore
 from matplotlib.figure import Figure
 from matplotlib.axes import Axes
+from matplotlib.backends.backend_pdf import PdfPages
+import os
+from datetime import datetime
 
 # NOTE: analysis_logic will be integrated later for advanced variation logic
 # from analysis_logic import vary_component_shares
@@ -125,6 +129,11 @@ class AnalysisWindow(QDialog):
         btn_row = QHBoxLayout()
         btn_row.addWidget(self.run_btn, 1)
         btn_row.addWidget(self.split_container, 0, alignment=Qt.AlignVCenter)
+        # Кнопка экспорта отчёта в PDF (появляется после построения)
+        self.export_btn = QPushButton(self.tr("Сформировать отчёт (PDF)"))
+        self.export_btn.setEnabled(False)
+        self.export_btn.hide()
+        btn_row.addWidget(self.export_btn, 0, alignment=Qt.AlignVCenter)
         layout.addLayout(btn_row)
         # Чекбокс появляется только после первого построения и далее не скрывается
         self.split_container.hide()
@@ -184,7 +193,9 @@ class AnalysisWindow(QDialog):
         self.hot_apply_btn.clicked.connect(
             lambda: self._apply_table(self.hot_table, which="hot")
         )
-        self.run_btn.clicked.connect(self._on_run_clicked)
+        # Кнопка построения отключена (построение выполняется автоматически)
+        # Экспорт отчёта (PDF)
+        self.export_btn.clicked.connect(self._on_export_pdf)
         # Закрыть раздельное окно при уничтожении основного
         try:
             self.destroyed.connect(self._on_destroyed)
@@ -253,12 +264,7 @@ class AnalysisWindow(QDialog):
         # Подсветка
         self._set_group_highlight("cold", "editing")
         self._set_group_highlight("hot", "editing")
-        # Кнопка построения доступна
-        try:
-            self.run_btn.show()
-            self.run_btn.setEnabled(True)
-        except Exception:
-            pass
+        # Кнопка построения скрыта; построение будет выполняться автоматически
         # Оставляем чекбокс как есть; если окно раздельных графиков открыто — оно остаётся и обновится после пересчета
         # Останавливаем мигание
         self._blink_timer.stop()
@@ -543,7 +549,18 @@ class AnalysisWindow(QDialog):
                 )
             except Exception:
                 pass
-        self.run_btn.hide()
+        # Показать и активировать экспорт PDF, когда данные готовы
+        try:
+            self.export_btn.setEnabled(bool(self._last_series_x))
+            if self._last_series_x:
+                self.export_btn.show()
+        except Exception:
+            pass
+        # Кнопка построения не используется — скрываем (на случай, если она где-то стала видимой)
+        try:
+            self.run_btn.hide()
+        except Exception:
+            pass
 
     def _on_split_toggled(self, checked: bool) -> None:
         # Переключение отдельного окна раздельных графиков
@@ -683,15 +700,16 @@ class AnalysisWindow(QDialog):
                         color=color,
                         markersize=3,
                     )
-            ax.set_xlabel("Доля компонента")
+            # Ось X локализуем, как и на экране
+            ax.set_xlabel(self.tr("Доля компонента (сценарий)"))
             ax.grid(True, linestyle=":", alpha=0.4)
 
         plot_series(self.ax_q, series_x, "Q")
         plot_series(self.ax_sigma, series_x, "Sigma")
         plot_series(self.ax_k, series_x, "K")
-        self.ax_q.set_title("Q (кВт)")
-        self.ax_sigma.set_title("σ (кВт/К)")
-        self.ax_k.set_title("K (кВт/К)")
+        self.ax_q.set_title(self.tr("Q (кВт)"))
+        self.ax_sigma.set_title(self.tr("σ (кВт/К)"))
+        self.ax_k.set_title(self.tr("K (кВт/К)"))
         # Легенды компактно
         for ax in (self.ax_q, self.ax_sigma, self.ax_k):
             ax.legend(fontsize=7, loc="best")
@@ -708,9 +726,9 @@ class AnalysisWindow(QDialog):
         # Создать окно при необходимости
         if getattr(self, "_split_window", None) is None:
             self._split_window = _SplitPlotsWindow(self)
-            # Позиционирование окна сбоку от текущего
+            # Позиционирование: по центру относительно экрана
             try:
-                self._split_window.position_next_to(self)
+                self._split_window.position_centered(self)
             except Exception:
                 pass
             self._split_window.show()
@@ -845,8 +863,8 @@ class AnalysisWindow(QDialog):
         if abs(total - 1.0) > 1e-6:
             QMessageBox.warning(
                 self,
-                "Анализ",
-                f"Сумма долей должна быть = 1.0 (текущая: {total:.6f}).",
+                self.tr("Анализ"),
+                self.tr("Сумма долей должна быть = 1.0 (текущая: {val:.6f}).").format(val=total),
             )
             return
         self._set_table_editable(table, False)
@@ -861,18 +879,18 @@ class AnalysisWindow(QDialog):
         except Exception:
             pass
         self._read_tables()
-        # Enable and show run button only if both locked
-        can_show = self._cold_locked and self._hot_locked
-        self.run_btn.setEnabled(can_show)
-        if can_show:
-            self.run_btn.show()
-            self._blink_on = False
-            self.run_btn.setStyleSheet(self._blink_base_style)
-            self._blink_timer.start()
+        # Автоматическое построение: если обе таблицы утверждены — сразу пересчитываем и строим
+        can_recalc = self._cold_locked and self._hot_locked
+        if can_recalc:
+            try:
+                self.recalculate()
+            except Exception:
+                pass
+        part = self.tr("Холодный") if which == "cold" else self.tr("Горячий")
         QMessageBox.information(
             self,
-            "Анализ",
-            f"Таблица '{'Холодный' if which=='cold' else 'Горячий'} поток' утверждена.",
+            self.tr("Анализ"),
+            self.tr("Таблица '{part}' поток' утверждена.").format(part=part),
         )
 
     def _on_edit_clicked(self, table: QTableWidget, which: str):
@@ -885,12 +903,7 @@ class AnalysisWindow(QDialog):
             self._set_group_highlight(which, "editing")
         except Exception:
             pass
-        # Кнопка остаётся видимой
-        try:
-            self.run_btn.show()
-            self.run_btn.setEnabled(True)
-        except Exception:
-            pass
+        # Кнопка построения скрыта (не используется)
         # Оставляем переключатель и окно раздельных графиков доступными
         # (обновятся после следующего пересчета)
         # Остановить мигание и вернуть базовый стиль
@@ -942,11 +955,161 @@ class AnalysisWindow(QDialog):
         except Exception:
             pass
 
+    def _on_export_pdf(self) -> None:
+        # Экспорт текущих графиков в PDF: опции — комбинированный, раздельный, оба; + титульная страница
+        try:
+            default_name = os.path.join(os.path.expanduser("~"), "analysis_report.pdf")
+            path, _ = QFileDialog.getSaveFileName(
+                self,
+                self.tr("Сохранить отчёт (PDF)"),
+                default_name,
+                "PDF (*.pdf)"
+            )
+            if not path:
+                return
+            # гарантируем расширение .pdf
+            if not path.lower().endswith(".pdf"):
+                path = f"{path}.pdf"
+            # Выбор страниц для экспорта
+            choice = _ExportPdfOptionsDialog.ask(self)
+            if choice is None:
+                return
+            # Создание PDF
+            with PdfPages(path) as pdf:
+                # Страница 1: титульная с исходными данными
+                try:
+                    fig_hdr = self._generate_header_figure()
+                    pdf.savefig(fig_hdr)
+                except Exception:
+                    pass
+                # Далее: выбранные страницы с графиками
+                include_combined, include_split = choice
+                if include_combined:
+                    # Комбинированные
+                    try:
+                        self.fig.tight_layout()
+                    except Exception:
+                        pass
+                    pdf.savefig(self.fig)
+                try:
+                    if include_split:
+                        sw = getattr(self, "_split_window", None)
+                        if sw is None:
+                            # Создать временное окно (не показывать) и нарисовать данные
+                            sw = _SplitPlotsWindow(None)
+                            try:
+                                sw.update_plots(
+                                    self._last_series_x,
+                                    self._last_series_q,
+                                    self._last_series_sigma,
+                                    self._last_series_k,
+                                )
+                            except Exception:
+                                pass
+                        try:
+                            sw.fig.tight_layout()
+                        except Exception:
+                            pass
+                        pdf.savefig(sw.fig)
+                except Exception:
+                    pass
+                # Метаданные
+                try:
+                    pdf.infodict()["Title"] = "HeatSim Analysis Report"
+                    pdf.infodict()["Author"] = "HeatSim"
+                    pdf.infodict()["Subject"] = "Component share variation analysis"
+                    # Используем текущую дату/время как строку ISO для совместимости
+                    pdf.infodict()["CreationDate"] = datetime.now().isoformat()
+                except Exception:
+                    pass
+            QMessageBox.information(
+                self,
+                self.tr("Экспорт PDF"),
+                self.tr("Отчёт успешно сохранён: {path}").format(path=path),
+            )
+        except Exception as e:
+            QMessageBox.warning(
+                self,
+                self.tr("Экспорт PDF"),
+                self.tr("Ошибка сохранения отчёта: {e}").format(e=e),
+            )
+
+    def _generate_header_figure(self) -> Figure:
+        # Создаёт титульную страницу с исходными параметрами и схемой
+        fig = Figure(figsize=(8.27, 11.69))  # A4 портретная
+        ax = fig.add_subplot(111)
+        ax.axis('off')
+        # Заголовки/текст
+        title = self.tr("Отчёт анализа HeatSim")
+        schema_txt = f"{self.tr('Схема')}: {self._schema}"
+        ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        when = f"{self.tr('Дата/время')}: {ts}"
+        # Потоки
+        def fmt_flow(name: str, flow: Dict[str, float]) -> str:
+            t_in = flow.get('t_in', 0.0)
+            t_out = flow.get('t_out', 0.0)
+            m = flow.get('m', 0.0)
+            return f"{name}: T_in={t_in:.3f} K, T_out={t_out:.3f} K, m={m:.6f} kg/s"
+        cold_line = fmt_flow(self.tr('Холодный поток'), self._base_cold_flow)
+        hot_line = fmt_flow(self.tr('Горячий поток'), self._base_hot_flow)
+        # Смеси: имя и доля
+        def fmt_mix(title: str, mix: List[Dict[str, Any]]) -> str:
+            parts: List[str] = []
+            for comp in mix:
+                name = str(comp.get('name', ''))
+                share = float(comp.get('share', 0.0))
+                parts.append(f"- {name}: {share:.4f}")
+            return title + "\n" + "\n".join(parts)
+        cold_mix_txt = fmt_mix(self.tr('Состав холодной смеси'), self._base_cold_mix)
+        hot_mix_txt = fmt_mix(self.tr('Состав горячей смеси'), self._base_hot_mix)
+        text = (
+            f"{title}\n\n"
+            f"{schema_txt}\n{when}\n\n"
+            f"{cold_line}\n{hot_line}\n\n"
+            f"{cold_mix_txt}\n\n{hot_mix_txt}"
+        )
+        ax.text(0.05, 0.95, text, va='top', ha='left', fontsize=11)
+        return fig
+
+
+class _ExportPdfOptionsDialog(QDialog):
+    """Диалог выбора страниц для экспорта PDF."""
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(self.tr('Экспорт PDF'))
+        self.setModal(True)
+        v = QVBoxLayout(self)
+        self.lbl = QLabel(self.tr('Что экспортировать?'))
+        v.addWidget(self.lbl)
+        hb = QHBoxLayout()
+        v.addLayout(hb)
+        self.btn_combined = QPushButton(self.tr('Комбинированные'))
+        self.btn_split = QPushButton(self.tr('Раздельные'))
+        self.btn_both = QPushButton(self.tr('Оба'))
+        hb.addWidget(self.btn_combined)
+        hb.addWidget(self.btn_split)
+        hb.addWidget(self.btn_both)
+        # Результат
+        self._choice: tuple[bool, bool] | None = None
+        self.btn_combined.clicked.connect(lambda: self._set_choice(True, False))
+        self.btn_split.clicked.connect(lambda: self._set_choice(False, True))
+        self.btn_both.clicked.connect(lambda: self._set_choice(True, True))
+
+    def _set_choice(self, combined: bool, split: bool) -> None:
+        self._choice = (combined, split)
+        self.accept()
+
+    @staticmethod
+    def ask(parent: QWidget) -> tuple[bool, bool] | None:
+        dlg = _ExportPdfOptionsDialog(parent)
+        rc = dlg.exec_()
+        return dlg._choice if rc == QDialog.Accepted else None
+
 
 class _SplitPlotsWindow(QDialog):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Графики по компонентам")
+        self.setWindowTitle(self.tr("Графики по компонентам"))
         # Немодальное отдельное окно
         self.setModal(False)
         self.setWindowModality(Qt.NonModal)
@@ -1005,6 +1168,21 @@ class _SplitPlotsWindow(QDialog):
         except Exception:
             pass
 
+    def position_centered(self, anchor: QWidget) -> None:
+        """Разместить окно по центру доступной области экрана якорного окна."""
+        try:
+            scr = anchor.screen()
+            avail = scr.availableGeometry()
+            # Размеры окна: используем разумные границы
+            w = max(900, min(1100, int(avail.width() * 0.6)))
+            h = max(600, min(int(avail.height() * 0.7), avail.height() - 40))
+            x = avail.x() + (avail.width() - w) // 2
+            y = avail.y() + (avail.height() - h) // 2
+            self.setGeometry(x, y, w, h)
+        except Exception:
+            # Fallback — сохраняем текущее положение
+            pass
+
     def update_plots(
         self,
         series_x: Dict[str, List[float]],
@@ -1029,20 +1207,20 @@ class _SplitPlotsWindow(QDialog):
                 ax3 = self.fig.add_subplot(n, 3, (row - 1) * 3 + 3)
                 if xs and qs:
                     ax1.plot(xs, qs, marker="o", linestyle="-", color="#1f77b4")
-                ax1.set_title(f"{label} — Q (кВт)")
-                ax1.set_xlabel("Доля компонента")
+                ax1.set_title(f"{label} — {self.tr('Q (кВт)')}")
+                ax1.set_xlabel(self.tr("Доля компонента"))
                 ax1.grid(True, linestyle=":", alpha=0.4)
 
                 if xs and sg:
                     ax2.plot(xs, sg, marker="o", linestyle="-", color="#d62728")
-                ax2.set_title(f"{label} — σ (кВт/К)")
-                ax2.set_xlabel("Доля компонента")
+                ax2.set_title(f"{label} — {self.tr('σ (кВт/К)')}")
+                ax2.set_xlabel(self.tr("Доля компонента"))
                 ax2.grid(True, linestyle=":", alpha=0.4)
 
                 if xs and ks:
                     ax3.plot(xs, ks, marker="o", linestyle="-", color="#2ca02c")
-                ax3.set_title(f"{label} — K (кВт/К)")
-                ax3.set_xlabel("Доля компонента")
+                ax3.set_title(f"{label} — {self.tr('K (кВт/К)')}")
+                ax3.set_xlabel(self.tr("Доля компонента"))
                 ax3.grid(True, linestyle=":", alpha=0.4)
 
             self.fig.tight_layout()

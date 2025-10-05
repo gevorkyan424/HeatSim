@@ -5,7 +5,7 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[('C:\\Users\\ruben\\OneDrive\\Documents\\Projects\\Python\\HeatSim\\assets', 'assets'), ('C:\\Users\\ruben\\OneDrive\\Documents\\Projects\\Python\\HeatSim\\data', 'data')],
+    datas=[('C:\\Users\\ruben\\OneDrive\\Documents\\Projects\\Python\\HeatSim\\assets', 'assets'), ('C:\\Users\\ruben\\OneDrive\\Documents\\Projects\\Python\\HeatSim\\data', 'data'), ('C:\\Users\\ruben\\OneDrive\\Documents\\Projects\\Python\\HeatSim\\i18n', 'i18n'), ('C:\\Users\\ruben\\OneDrive\\Documents\\Projects\\Python\\HeatSim\\VERSION', 'VERSION'), ('C:\\Users\\ruben\\OneDrive\\Documents\\Projects\\Python\\HeatSim\\Лицензионное_соглашение.txt', 'Лицензионное_соглашение.txt')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

@@ -3,6 +3,7 @@ import os
 import csv
 import logging
 from datetime import datetime
+import sys
 from pathlib import Path
 from typing import Callable, TypedDict, Any, List, Dict, Optional, Sequence, cast, Tuple
 
@@ -55,8 +56,33 @@ from PyQt5.QtWidgets import (
 
 import logic  # модуль расчётов
 
-LOG_DIR = Path(os.path.dirname(os.path.abspath(__file__))) / "logs"
-LOG_DIR.mkdir(exist_ok=True)
+
+# Helper to resolve resource paths in both dev and PyInstaller onefile modes
+def resource_path(*paths: str) -> Path:
+    try:
+        base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+    except Exception:
+        base = Path(__file__).resolve().parent
+    return base.joinpath(*paths)
+
+
+# Choose a writable directory for logs (e.g., %LOCALAPPDATA%\HeatSim\logs on Windows)
+def writable_app_dir() -> Path:
+    try:
+        if sys.platform.startswith("win"):
+            base_env = os.environ.get("LOCALAPPDATA") or os.path.join(
+                str(Path.home()), "AppData", "Local"
+            )
+            base = Path(base_env)
+        else:
+            base = Path.home()
+        return base / "HeatSim"
+    except Exception:
+        return Path.cwd() / "HeatSim"
+
+
+LOG_DIR = writable_app_dir() / "logs"
+LOG_DIR.mkdir(parents=True, exist_ok=True)
 LOG_FILE = LOG_DIR / "app.log"
 logging.basicConfig(
     level=logging.INFO,
@@ -67,6 +93,9 @@ logging.basicConfig(
     ],
 )
 logger = logging.getLogger(__name__)
+
+# Feature flag: show legacy Language menu (kept for future use). Disabled per user request.
+SHOW_LANGUAGE_MENU = False
 
 try:
     import openpyxl  # type: ignore
@@ -563,7 +592,7 @@ def set_enabled(le: QLineEdit, enabled: bool) -> None:
 def lock_button_for(line_edit: QLineEdit) -> QPushButton:
     btn = QPushButton()
     btn.setFixedSize(22, 22)
-    btn.setToolTip("Заблокировать/разблокировать поле")
+    btn.setToolTip(QCoreApplication.translate("UI", "Заблокировать/разблокировать поле"))
 
     def on_click():
         # if the field is enabled -> lock it; otherwise unlock
@@ -592,6 +621,11 @@ def lock_button_for(line_edit: QLineEdit) -> QPushButton:
                 # clear typed flag
                 if hasattr(line_edit, "_just_unlocked_typed"):
                     delattr(line_edit, "_just_unlocked_typed")
+                # remember initial text to detect changes even if textEdited didn't fire
+                try:
+                    setattr(line_edit, "_unlock_initial_text", line_edit.text())
+                except Exception:
+                    setattr(line_edit, "_unlock_initial_text", None)
             except Exception:
                 pass
 
@@ -633,14 +667,26 @@ def auto_disable_handler(line_edit: QLineEdit) -> Callable[[], None]:
     def _handler() -> None:
         # if we just unlocked for editing, only skip auto-disable when no typing occurred
         if getattr(line_edit, "_just_unlocked_waiting", False):
-            # if user typed, proceed to disable and clear flags
-            if getattr(line_edit, "_just_unlocked_typed", False):
+            # decide if text actually changed since unlock
+            try:
+                initial_txt = getattr(line_edit, "_unlock_initial_text", None)
+                current_txt = line_edit.text()
+                changed = (initial_txt is not None) and (current_txt != initial_txt)
+            except Exception:
+                changed = False
+            # if user typed or text changed, proceed to disable and clear flags
+            if getattr(line_edit, "_just_unlocked_typed", False) or changed:
                 try:
                     delattr(line_edit, "_just_unlocked_typed")
                 except Exception:
                     pass
                 try:
                     delattr(line_edit, "_just_unlocked_waiting")
+                except Exception:
+                    pass
+                try:
+                    if hasattr(line_edit, "_unlock_initial_text"):
+                        delattr(line_edit, "_unlock_initial_text")
                 except Exception:
                     pass
                 # allow auto-disable to proceed
@@ -848,6 +894,70 @@ class KeyDeleteFilter(QObject):
         return super().eventFilter(obj, event)
 
 
+# ===================== ФИЛЬТР АВТО-БЛОКИРОВКИ НА ВЫХОДЕ ИЗ ФОКУСА =====================
+class AutoLockRecalcFilter(QObject):
+    """Фильтр, который при уходе фокуса:
+    - при необходимости авто-блокирует поле (как auto_disable_handler)
+    - если был явный расчёт и значение изменили, показывает кнопку «Перерасчёт»
+    """
+
+    def __init__(
+        self,
+        owner: QMainWindow,
+        line_edit: QLineEdit,
+        on_any_input_changed: Callable[[], None],
+    ) -> None:
+        super().__init__(owner)
+        self._owner = owner
+        self._le = line_edit
+        self._on_changed = on_any_input_changed
+
+    def eventFilter(self, obj: QObject, event: QEvent) -> bool:  # type: ignore[override]
+        try:
+            if obj is self._le and event.type() == QEvent.FocusOut:
+                # Определим, нужно ли авто-блокировать
+                do_lock = True
+                if getattr(self._le, "_just_unlocked_waiting", False):
+                    try:
+                        initial_txt = getattr(self._le, "_unlock_initial_text", None)
+                        current_txt = self._le.text()
+                        changed = (initial_txt is not None) and (
+                            current_txt != initial_txt
+                        )
+                    except Exception:
+                        changed = False
+                    # Если пользователь не вводил и текст не изменился — не блокируем
+                    if (
+                        not getattr(self._le, "_just_unlocked_typed", False)
+                        and not changed
+                    ):
+                        do_lock = False
+                    # Сбрасываем флаги, если будем блокировать
+                    if do_lock:
+                        for attr in (
+                            "_just_unlocked_typed",
+                            "_just_unlocked_waiting",
+                            "_unlock_initial_text",
+                        ):
+                            try:
+                                if hasattr(self._le, attr):
+                                    delattr(self._le, attr)
+                            except Exception:
+                                pass
+                if do_lock and self._le.isEnabled():
+                    # Авто-блокировка поля
+                    set_enabled(self._le, False)
+                    # Если уже был явный расчёт — показать кнопку «Перерасчёт»
+                    try:
+                        if getattr(self._owner, "_explicit_calc_done", False):
+                            self._on_changed()
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        return super().eventFilter(obj, event)
+
+
 # ===================== МОДЕЛЬ СМЕСИ =====================
 class MixModel(QStandardItemModel):
     COL_NAME, COL_SHARE, COL_TB, COL_CF, COL_CP, COL_RF = range(6)
@@ -872,15 +982,34 @@ class MixModel(QStandardItemModel):
             )
 
     def retranslate_headers(self) -> None:
-        """Переустанавливает заголовки столбцов с учётом активного переводчика."""
+        """Переустанавливает заголовки столбцов и даёт явные EN подписи без .qm."""
+        # Определяем язык аналогично MixPanel._is_lang_en
+        en = False
+        try:
+            app_inst = QApplication.instance()
+            active_lang = (
+                str(getattr(app_inst, "_app_translator_lang", "") or "").lower()
+                if app_inst is not None
+                else ""
+            )
+            desired = str(QSettings().value("ui/language", "ru") or "ru").lower()
+            en = desired == "en" or active_lang.startswith("en")
+        except Exception:
+            en = False
+        headers_en = [
+            "Component",
+            "Share",
+            "Tb, K",
+            "C_f, kJ/kg·K",
+            "C_p, kJ/kg·K",
+            "r_f, kJ/kg",
+        ]
         for i, h in enumerate(self.HEADERS):
             try:
-                self.setHeaderData(
-                    i,
-                    Qt.Horizontal,
-                    QCoreApplication.translate("MixModel", h),
-                    role=Qt.DisplayRole,
+                text = (
+                    headers_en[i] if en else QCoreApplication.translate("MixModel", h)
                 )
+                self.setHeaderData(i, Qt.Horizontal, text, role=Qt.DisplayRole)
             except Exception:
                 pass
 
@@ -1028,17 +1157,23 @@ class MixPanel:
         self.lbl_tb = QLabel(self.box.tr("Температура кипения, Tb  [ K ]"))
         grid.addWidget(self.lbl_tb, 0, 0)
         grid.addWidget(self.tb, 0, 1)
-        self.lbl_cf = QLabel(self.box.tr("Удельная теплоёмкость жидкости, C_f  [ кДж/кг·K ]"))
+        self.lbl_cf = QLabel(
+            self.box.tr("Удельная теплоёмкость жидкости, C_f  [ кДж/кг·K ]")
+        )
         grid.addWidget(
             self.lbl_cf,
             1,
             0,
         )
         grid.addWidget(self.cf, 1, 1)
-        self.lbl_cp = QLabel(self.box.tr("Удельная теплоёмкость пара, C_p  [ кДж/кг·K ]"))
+        self.lbl_cp = QLabel(
+            self.box.tr("Удельная теплоёмкость пара, C_p  [ кДж/кг·K ]")
+        )
         grid.addWidget(self.lbl_cp, 2, 0)
         grid.addWidget(self.cp, 2, 1)
-        self.lbl_rf = QLabel(self.box.tr("Скрытая теплота фазового перехода, r_f  [ кДж/кг ]"))
+        self.lbl_rf = QLabel(
+            self.box.tr("Скрытая теплота фазового перехода, r_f  [ кДж/кг ]")
+        )
         grid.addWidget(
             self.lbl_rf,
             3,
@@ -1146,6 +1281,32 @@ class MixPanel:
                 self.lbl_rf.setText(
                     self.box.tr("Скрытая теплота фазового перехода, r_f  [ кДж/кг ]")
                 )
+        except Exception:
+            pass
+
+    def retranslate_existing_rows(self, lang: str) -> None:
+        """Переименовать отображаемые имена компонентов в существующих строках под активный язык.
+        Логические ключи компонентов остаются русскими; здесь меняется только DisplayRole.
+        """
+        try:
+            to_en = (lang or "ru").lower().startswith("en")
+        except Exception:
+            to_en = False
+        try:
+            for r in range(self.model.rowCount()):
+                idx = self.model.index(r, MixModel.COL_NAME)
+                cur = str(self.model.data(idx, Qt.DisplayRole) or "")
+                # Определим русский ключ для этого имени
+                if cur in COMPONENT_DB:
+                    ru_key = cur
+                elif cur in COMPONENT_NAME_RU_FROM_EN:
+                    ru_key = COMPONENT_NAME_RU_FROM_EN[cur]
+                else:
+                    # неизвестное имя — оставляем как есть
+                    ru_key = cur
+                new_disp = COMPONENT_NAME_EN.get(ru_key, ru_key) if to_en else ru_key
+                if new_disp != cur:
+                    self.model.setData(idx, new_disp, Qt.DisplayRole)
         except Exception:
             pass
 
@@ -1376,10 +1537,22 @@ class MixPanel:
     def ask_delete(self, count: int) -> bool:
         box = QMessageBox(self.box)
         box.setIcon(QMessageBox.Question)
-        box.setWindowTitle(self.box.tr("Удаление"))
-        box.setText(self.box.tr("Удалить {n} строку(и)?").format(n=count))
-        yes_btn = box.addButton(self.box.tr("Да"), QMessageBox.AcceptRole)
-        no_btn = box.addButton(self.box.tr("Нет"), QMessageBox.RejectRole)
+        # Заголовок и текст: при EN задаём явные английские строки, иначе через tr()
+        if self._is_lang_en():
+            title = "Delete"
+            text = f"Delete {count} row(s)?"
+        else:
+            title = self.box.tr("Удаление")
+            text = self.box.tr("Удалить {n} строку(и)?").format(n=count)
+        box.setWindowTitle(title)
+        box.setText(text)
+        # Кнопки: для режима EN ставим явные английские подписи, иначе — через tr()
+        if self._is_lang_en():
+            yes_btn = box.addButton("Yes", QMessageBox.AcceptRole)
+            no_btn = box.addButton("No", QMessageBox.RejectRole)
+        else:
+            yes_btn = box.addButton(self.box.tr("Да"), QMessageBox.AcceptRole)
+            no_btn = box.addButton(self.box.tr("Нет"), QMessageBox.RejectRole)
         box.setDefaultButton(no_btn)  # по умолчанию Нет
         box.exec_()
         return box.clickedButton() is yes_btn
@@ -1394,11 +1567,14 @@ class MixPanel:
     def delete_selected_rows(self) -> None:
         rows = self.selected_source_rows()
         if not rows:
-            QMessageBox.information(
-                self.box,
-                self.box.tr("Удаление"),
-                self.box.tr("Выберите строку(и) для удаления."),
-            )
+            if self._is_lang_en():
+                QMessageBox.information(self.box, "Delete", "Select row(s) to delete.")
+            else:
+                QMessageBox.information(
+                    self.box,
+                    self.box.tr("Удаление"),
+                    self.box.tr("Выберите строку(и) для удаления."),
+                )
             return
         if not self.ask_delete(len(rows)):
             return
@@ -1719,23 +1895,24 @@ class MainWindow(QMainWindow):
             ):
                 self._theme_group.addAction(a)
                 self.theme_menu.addAction(a)
-            # --- Язык ---
-            self.lang_menu = self.view_menu.addMenu(self.tr("Язык"))
-            self._lang_group = QActionGroup(self)
-            self._lang_group.setExclusive(True)
-            self._act_lang_ru = QAction(self.tr("Русский"), self)
-            self._act_lang_ru.setCheckable(True)
-            self._act_lang_en = QAction(self.tr("English"), self)
-            self._act_lang_en.setCheckable(True)
-            for a in (self._act_lang_ru, self._act_lang_en):
-                self._lang_group.addAction(a)
-                self.lang_menu.addAction(a)
-            self._act_lang_ru.triggered.connect(
-                lambda: self._on_language_selected("ru")
-            )
-            self._act_lang_en.triggered.connect(
-                lambda: self._on_language_selected("en")
-            )
+            # --- Язык (устаревшее меню, отключено по запросу пользователя; оставить на будущее) ---
+            if SHOW_LANGUAGE_MENU:
+                self.lang_menu = self.view_menu.addMenu(self.tr("Язык"))
+                self._lang_group = QActionGroup(self)
+                self._lang_group.setExclusive(True)
+                self._act_lang_ru = QAction(self.tr("Русский"), self)
+                self._act_lang_ru.setCheckable(True)
+                self._act_lang_en = QAction(self.tr("English"), self)
+                self._act_lang_en.setCheckable(True)
+                for a in (self._act_lang_ru, self._act_lang_en):
+                    self._lang_group.addAction(a)
+                    self.lang_menu.addAction(a)
+                self._act_lang_ru.triggered.connect(
+                    lambda: self._on_language_selected("ru")
+                )
+                self._act_lang_en.triggered.connect(
+                    lambda: self._on_language_selected("en")
+                )
             self.act_imp_inputs.triggered.connect(self.import_inputs)  # type: ignore[call-arg]
             self.act_exp_inputs.triggered.connect(self.export_inputs)  # type: ignore[call-arg]
             self.act_imp_inputs_xlsx.triggered.connect(self.import_inputs_xlsx)  # type: ignore[call-arg]
@@ -1780,6 +1957,52 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
         layout = QVBoxLayout()
         central.setLayout(layout)
+
+        # Верхняя панель с кнопками RU/EN (справа)
+        topbar = QHBoxLayout()
+        topbar.setContentsMargins(0, 0, 0, 0)
+        topbar.setSpacing(6)
+        topbar.addStretch(1)
+        self.lang_btn_ru = QPushButton("RU")
+        self.lang_btn_en = QPushButton("EN")
+        for b in (self.lang_btn_ru, self.lang_btn_en):
+            try:
+                b.setFixedHeight(24)
+                b.setCheckable(True)
+                b.setCursor(Qt.PointingHandCursor)
+            except Exception:
+                pass
+        # подсветка выбранной кнопки
+        try:
+            sel_style = (
+                "QPushButton { padding: 4px 10px; } "
+                "QPushButton:checked { background: #2d7dff; color: white; font-weight: 600; }"
+            )
+            self.lang_btn_ru.setStyleSheet(sel_style)
+            self.lang_btn_en.setStyleSheet(sel_style)
+        except Exception:
+            pass
+        # эксклюзивная группа
+        try:
+            self._lang_btn_group = QButtonGroup(self)
+            self._lang_btn_group.setExclusive(True)
+            self._lang_btn_group.addButton(self.lang_btn_ru)
+            self._lang_btn_group.addButton(self.lang_btn_en)
+        except Exception:
+            pass
+        try:
+            self.lang_btn_ru.setToolTip(self.tr("Язык: русский"))
+            self.lang_btn_en.setToolTip(self.tr("Язык: английский"))
+        except Exception:
+            pass
+        try:
+            self.lang_btn_ru.clicked.connect(lambda: self._on_language_selected("ru"))
+            self.lang_btn_en.clicked.connect(lambda: self._on_language_selected("en"))
+        except Exception:
+            pass
+        topbar.addWidget(self.lang_btn_ru)
+        topbar.addWidget(self.lang_btn_en)
+        layout.addLayout(topbar)
 
         # потоки
         row1 = QHBoxLayout()
@@ -1928,6 +2151,13 @@ class MainWindow(QMainWindow):
             self.hot_panel.t_out.editingFinished.connect(
                 self._on_tplus_out_edit_finished  # type: ignore[call-arg]
             )
+            # авто-блокировка этих полей после редактирования
+            self.out_panel.q.editingFinished.connect(
+                auto_disable_handler(self.out_panel.q)
+            )
+            self.hot_panel.t_out.editingFinished.connect(
+                auto_disable_handler(self.hot_panel.t_out)
+            )
         except Exception:
             pass
         # Подключим auto-calc при завершении ввода основных входных полей
@@ -1962,6 +2192,17 @@ class MainWindow(QMainWindow):
                 if hasattr(w, "editingFinished"):
                     try:
                         w.editingFinished.connect(self._update_calc_button_state)  # type: ignore[call-arg]
+                        # При любом завершении ввода — инициируем режим «перерасчёта»: показать кнопку и обновить значения
+                        w.editingFinished.connect(self._on_any_input_changed)  # type: ignore[call-arg]
+                        # Добавим фильтр на уход фокуса для надёжной авто-блокировки и показа «Перерасчёта»
+                        try:
+                            _f = AutoLockRecalcFilter(
+                                self, w, self._on_any_input_changed
+                            )
+                            setattr(w, "_autoLockFilter", _f)
+                            w.installEventFilter(_f)
+                        except Exception:
+                            pass
                     except Exception:
                         pass
                 # connect dataChanged if available (models)
@@ -2060,22 +2301,42 @@ class MainWindow(QMainWindow):
                 self.hot_mix.model.retranslate_headers()
             except Exception:
                 pass
+            # Переименовать уже добавленные строки смесей под активный язык
+            try:
+                self.cold_mix.retranslate_existing_rows(lang0)
+                self.hot_mix.retranslate_existing_rows(lang0)
+            except Exception:
+                pass
             # Кнопки справа
             try:
                 if lang0.startswith("en"):
                     self.calc_btn.setText("Calculate")
                     self.reset_btn.setText("Clear parameters")
                     self.analysis_btn.setText("Run analysis")
-                    self.analysis_btn.setToolTip("Run analysis by varying component shares")
+                    self.analysis_btn.setToolTip(
+                        "Run analysis by varying component shares"
+                    )
                     self.recalc_btn.setText("Recalculate")
                     self.recalc_btn.setToolTip("Recalculate after changes")
                 else:
                     self.calc_btn.setText(self.tr("Вычислить"))
                     self.reset_btn.setText(self.tr("Очистить параметры"))
                     self.analysis_btn.setText(self.tr("Провести анализ"))
-                    self.analysis_btn.setToolTip(self.tr("Провести анализ изменяя доли компонентов потоков"))
+                    self.analysis_btn.setToolTip(
+                        self.tr("Провести анализ изменяя доли компонентов потоков")
+                    )
                     self.recalc_btn.setText(self.tr("Перерасчёт"))
                     self.recalc_btn.setToolTip(self.tr("Пересчитать после изменений"))
+            except Exception:
+                pass
+            # Обновим подсветку RU/EN кнопок в топбаре
+            try:
+                if lang0.startswith("en"):
+                    self.lang_btn_en.setChecked(True)
+                    self.lang_btn_ru.setChecked(False)
+                else:
+                    self.lang_btn_ru.setChecked(True)
+                    self.lang_btn_en.setChecked(False)
             except Exception:
                 pass
             # Текст статус-бара
@@ -2102,17 +2363,29 @@ class MainWindow(QMainWindow):
             self._act_theme_dark.setChecked(True)
         else:
             self._act_theme_system.setChecked(True)
-        # Язык — отмечаем текущий выбор
+        # Язык — отмечаем текущий выбор (кнопки в правом верхнем углу +, при включённом флаге, элементы меню)
         try:
             lang_norm = (lang or "ru").lower()
             if lang_norm.startswith("en"):
                 try:
-                    self._act_lang_en.setChecked(True)
+                    if SHOW_LANGUAGE_MENU:
+                        self._act_lang_en.setChecked(True)
+                except Exception:
+                    pass
+                try:
+                    self.lang_btn_en.setChecked(True)
+                    self.lang_btn_ru.setChecked(False)
                 except Exception:
                     pass
             else:
                 try:
-                    self._act_lang_ru.setChecked(True)
+                    if SHOW_LANGUAGE_MENU:
+                        self._act_lang_ru.setChecked(True)
+                except Exception:
+                    pass
+                try:
+                    self.lang_btn_ru.setChecked(True)
+                    self.lang_btn_en.setChecked(False)
                 except Exception:
                     pass
         except Exception:
@@ -2158,23 +2431,26 @@ class MainWindow(QMainWindow):
             self.theme_menu.setTitle(
                 "Theme" if lang_norm.startswith("en") else self.tr("Тема")
             )
-            self.lang_menu.setTitle(
-                "Language" if lang_norm.startswith("en") else self.tr("Язык")
-            )
+            if SHOW_LANGUAGE_MENU:
+                self.lang_menu.setTitle(
+                    "Language" if lang_norm.startswith("en") else self.tr("Язык")
+                )
             if lang_norm.startswith("en"):
                 self.act_reset_view.setText("Reset view (defaults)")
                 self._act_theme_light.setText("Light")
                 self._act_theme_dark.setText("Dark")
                 self._act_theme_system.setText("System")
-                self._act_lang_ru.setText("Russian")
-                self._act_lang_en.setText("English")
+                if SHOW_LANGUAGE_MENU:
+                    self._act_lang_ru.setText("Russian")
+                    self._act_lang_en.setText("English")
             else:
                 self.act_reset_view.setText(self.tr("Сбросить вид (по умолчанию)"))
                 self._act_theme_light.setText(self.tr("Светлая"))
                 self._act_theme_dark.setText(self.tr("Тёмная"))
                 self._act_theme_system.setText(self.tr("Системная"))
-                self._act_lang_ru.setText(self.tr("Русский"))
-                self._act_lang_en.setText(self.tr("English"))
+                if SHOW_LANGUAGE_MENU:
+                    self._act_lang_ru.setText(self.tr("Русский"))
+                    self._act_lang_en.setText(self.tr("English"))
         except Exception:
             pass
         try:
@@ -2307,6 +2583,14 @@ class MainWindow(QMainWindow):
                 self.hot_mix.model.retranslate_headers()
             except Exception:
                 pass
+            # Переименуем существующие строки смесей (RU<->EN)
+            try:
+                if hasattr(self, "cold_mix"):
+                    self.cold_mix.retranslate_existing_rows(lang)  # type: ignore[attr-defined]
+                if hasattr(self, "hot_mix"):
+                    self.hot_mix.retranslate_existing_rows(lang)  # type: ignore[attr-defined]
+            except Exception:
+                pass
             # Обновим статус-бар (короткое сообщение)
             try:
                 if lang.startswith("en"):
@@ -2321,14 +2605,18 @@ class MainWindow(QMainWindow):
                     self.calc_btn.setText("Calculate")
                     self.reset_btn.setText("Clear parameters")
                     self.analysis_btn.setText("Run analysis")
-                    self.analysis_btn.setToolTip("Run analysis by varying component shares")
+                    self.analysis_btn.setToolTip(
+                        "Run analysis by varying component shares"
+                    )
                     self.recalc_btn.setText("Recalculate")
                     self.recalc_btn.setToolTip("Recalculate after changes")
                 else:
                     self.calc_btn.setText(self.tr("Вычислить"))
                     self.reset_btn.setText(self.tr("Очистить параметры"))
                     self.analysis_btn.setText(self.tr("Провести анализ"))
-                    self.analysis_btn.setToolTip(self.tr("Провести анализ изменяя доли компонентов потоков"))
+                    self.analysis_btn.setToolTip(
+                        self.tr("Провести анализ изменяя доли компонентов потоков")
+                    )
                     self.recalc_btn.setText(self.tr("Перерасчёт"))
                     self.recalc_btn.setToolTip(self.tr("Пересчитать после изменений"))
             except Exception:
@@ -2403,8 +2691,7 @@ class MainWindow(QMainWindow):
                 pass
             return True
         try:
-            base_dir = os.path.dirname(os.path.abspath(__file__))
-            qm_path = os.path.join(base_dir, "i18n", f"HeatSim_{lang}.qm")
+            qm_path = str(resource_path("i18n", f"HeatSim_{lang}.qm"))
             if not os.path.exists(qm_path):
                 return False
             tr = QTranslator()
@@ -2455,30 +2742,17 @@ class MainWindow(QMainWindow):
         try:
             if not checked:
                 return
-            # Если ещё не было явного нажатия Вычислить, то ограничиваемся минимальным авторасчётом
-            if (
-                (not getattr(self, "_explicit_calc_done", False))
-                or getattr(self, "_importing", False)
-                or getattr(self, "_suppress_full_calc_after_import", False)
-            ):
-                try:
-                    self._try_auto_calc()
-                except Exception:
-                    pass
-                return
-            # После явного вычисления: не пересчитываем автоматически, а помечаем устаревание
+            # Любая смена схемы делает результат устаревшим; не выполняем автопересчёт
+            self._results_stale = True
+            # показываем кнопку «Перерасчёт» всегда, чтобы пользователь мог подтвердить пересчёт
             try:
-                self._results_stale = True
-                # Обновим UI: показать «Перерасчёт», скрыть «Вычислить»
-                try:
-                    self._mark_stale_results()
-                except Exception:
-                    # если _mark_stale_results по какой-то причине не сработал — принудительно
-                    if self._mix_valid(self.cold_mix.mix_rows()) and self._mix_valid(
-                        self.hot_mix.mix_rows()
-                    ):
-                        self.recalc_btn.show()
-                        self.calc_btn.hide()
+                self.recalc_btn.show()
+                self.calc_btn.hide()
+            except Exception:
+                pass
+            # Снять подавление «после импорта», чтобы пересчёт по кнопке прошёл нормально
+            try:
+                self._suppress_full_calc_after_import = False
             except Exception:
                 pass
         except Exception:
@@ -2530,7 +2804,10 @@ class MainWindow(QMainWindow):
         """
         try:
             path, _ = QFileDialog.getSaveFileName(
-                self, "Экспорт входных данных", "", "CSV Files (*.csv);;All Files (*)"
+                self,
+                self.tr("Экспорт входных данных"),
+                "",
+                "CSV Files (*.csv);;All Files (*)",
             )
             if not path:
                 return
@@ -2623,20 +2900,23 @@ class MainWindow(QMainWindow):
                 w.writerow(["meta", "schema", data.get("schema", "")])
                 w.writerow(["meta", "q", data.get("q", "")])
         except Exception as e:
-            QMessageBox.warning(self, "Ошибка экспорта", str(e))
+            QMessageBox.warning(self, self.tr("Ошибка экспорта"), str(e))
 
     def export_inputs_xlsx(self) -> None:
         """Export inputs to an .xlsx workbook with separate sheets for flows and mixes."""
         if openpyxl is None:
             QMessageBox.warning(
                 self,
-                "Excel экспорт",
-                "Требуется пакет openpyxl. Установите его в окружение.",
+                self.tr("Excel экспорт"),
+                self.tr("Требуется пакет openpyxl. Установите его в окружение."),
             )
             return
         try:
             path, _ = QFileDialog.getSaveFileName(
-                self, "Экспорт в Excel", "", "Excel Files (*.xlsx);;All Files (*)"
+                self,
+                self.tr("Экспорт в Excel"),
+                "",
+                "Excel Files (*.xlsx);;All Files (*)",
             )
             if not path:
                 return
@@ -2700,21 +2980,24 @@ class MainWindow(QMainWindow):
             ws_meta.append(["q", data.get("q", "")])
             wb.save(path)
         except Exception as e:
-            QMessageBox.warning(self, "Ошибка экспорта Excel", str(e))
+            QMessageBox.warning(self, self.tr("Ошибка экспорта Excel"), str(e))
 
     def import_inputs_xlsx(self) -> None:
         """Import inputs from an .xlsx workbook created by `export_inputs_xlsx`."""
         if openpyxl is None:
             QMessageBox.warning(
                 self,
-                "Excel импорт",
-                "Требуется пакет openpyxl. Установите его в окружение.",
+                self.tr("Excel импорт"),
+                self.tr("Требуется пакет openpyxl. Установите его в окружение."),
             )
             return
         try:
             self._importing = True
             path, _ = QFileDialog.getOpenFileName(
-                self, "Импорт из Excel", "", "Excel Files (*.xlsx);;All Files (*)"
+                self,
+                self.tr("Импорт из Excel"),
+                "",
+                "Excel Files (*.xlsx);;All Files (*)",
             )
             if not path:
                 return
@@ -2802,6 +3085,39 @@ class MainWindow(QMainWindow):
                             except Exception:
                                 return True
 
+                        # Определим, нужно ли показывать имена на EN
+                        def _to_display_name(name: str) -> str:
+                            try:
+                                app_inst = QApplication.instance()
+                                active_lang = (
+                                    str(
+                                        getattr(app_inst, "_app_translator_lang", "")
+                                        or ""
+                                    ).lower()
+                                    if app_inst is not None
+                                    else ""
+                                )
+                                desired = str(
+                                    QSettings().value("ui/language", "ru") or "ru"
+                                ).lower()
+                                to_en = desired == "en" or active_lang.startswith("en")
+                            except Exception:
+                                to_en = False
+                            # Определяем русский ключ компонента
+                            ru_key = name
+                            try:
+                                if name in COMPONENT_DB:
+                                    ru_key = name
+                                elif name in COMPONENT_NAME_RU_FROM_EN:
+                                    ru_key = COMPONENT_NAME_RU_FROM_EN[name]
+                            except Exception:
+                                pass
+                            return (
+                                COMPONENT_NAME_EN.get(ru_key, ru_key)
+                                if to_en
+                                else ru_key
+                            )
+
                         for row in rows:
                             try:
                                 nm = cell_to_str(row[0]) if row and len(row) > 0 else ""
@@ -2829,7 +3145,10 @@ class MainWindow(QMainWindow):
                                     if row and len(row) > 5
                                     else 0.0
                                 )
-                                target.model.add_or_update(nm, share, tb, cf, cp, rf)
+                                display_nm = _to_display_name(nm)
+                                target.model.add_or_update(
+                                    display_nm, share, tb, cf, cp, rf
+                                )
                             except Exception:
                                 pass
                     except Exception:
@@ -2868,6 +3187,15 @@ class MainWindow(QMainWindow):
                 self._update_calc_button_state()
             except Exception:
                 pass
+            # Перевести заголовки и имена компонентов под активный язык
+            try:
+                self.cold_mix.model.retranslate_headers()
+                self.hot_mix.model.retranslate_headers()
+                lang_now = str(QSettings().value("ui/language", "ru") or "ru").lower()
+                self.cold_mix.retranslate_existing_rows(lang_now)
+                self.hot_mix.retranslate_existing_rows(lang_now)
+            except Exception:
+                pass
             try:
                 self._suppress_full_calc_after_import = True
             except Exception:
@@ -2879,7 +3207,7 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
         except Exception as e:
-            QMessageBox.warning(self, "Ошибка импорта Excel", str(e))
+            QMessageBox.warning(self, self.tr("Ошибка импорта Excel"), str(e))
         finally:
             try:
                 self._importing = False
@@ -2921,7 +3249,10 @@ class MainWindow(QMainWindow):
         try:
             self._importing = True
             path, _ = QFileDialog.getOpenFileName(
-                self, "Импорт входных данных", "", "CSV Files (*.csv);;All Files (*)"
+                self,
+                self.tr("Импорт входных данных"),
+                "",
+                "CSV Files (*.csv);;All Files (*)",
             )
             if not path:
                 return
@@ -3035,13 +3366,38 @@ class MainWindow(QMainWindow):
                 self.hot_panel.m.setText(str(fh.get("m", "")))
                 self.hot_panel.p.setText(str(fh.get("p", "")))
 
-            # replace mixes
+            # replace mixes (с учётом активного языка для отображения имён)
             if self.cold_mix.model.rowCount() > 0:
                 self.cold_mix.model.removeRows(0, self.cold_mix.model.rowCount())
+
+            def _to_display_name(name: str) -> str:
+                try:
+                    app_inst = QApplication.instance()
+                    active_lang = (
+                        str(getattr(app_inst, "_app_translator_lang", "") or "").lower()
+                        if app_inst is not None
+                        else ""
+                    )
+                    desired = str(
+                        QSettings().value("ui/language", "ru") or "ru"
+                    ).lower()
+                    to_en = desired == "en" or active_lang.startswith("en")
+                except Exception:
+                    to_en = False
+                ru_key = name
+                try:
+                    if name in COMPONENT_DB:
+                        ru_key = name
+                    elif name in COMPONENT_NAME_RU_FROM_EN:
+                        ru_key = COMPONENT_NAME_RU_FROM_EN[name]
+                except Exception:
+                    pass
+                return COMPONENT_NAME_EN.get(ru_key, ru_key) if to_en else ru_key
+
             for r in cold_mix:
                 try:
                     self.cold_mix.model.add_or_update(
-                        r.get("name", ""),
+                        _to_display_name(str(r.get("name", ""))),
                         float(r.get("share", 0.0) or 0.0),
                         float(r.get("tb", 0.0) or 0.0),
                         float(r.get("cf", 0.0) or 0.0),
@@ -3055,7 +3411,7 @@ class MainWindow(QMainWindow):
             for r in hot_mix:
                 try:
                     self.hot_mix.model.add_or_update(
-                        r.get("name", ""),
+                        _to_display_name(str(r.get("name", ""))),
                         float(r.get("share", 0.0) or 0.0),
                         float(r.get("tb", 0.0) or 0.0),
                         float(r.get("cf", 0.0) or 0.0),
@@ -3086,6 +3442,15 @@ class MainWindow(QMainWindow):
                 self._update_calc_button_state()
             except Exception:
                 pass
+            # Перевести заголовки и имена компонентов под активный язык
+            try:
+                self.cold_mix.model.retranslate_headers()
+                self.hot_mix.model.retranslate_headers()
+                lang_now = str(QSettings().value("ui/language", "ru") or "ru").lower()
+                self.cold_mix.retranslate_existing_rows(lang_now)
+                self.hot_mix.retranslate_existing_rows(lang_now)
+            except Exception:
+                pass
             # suppress full sigma/K calculation on subsequent schema toggles until user confirms
             try:
                 self._suppress_full_calc_after_import = True
@@ -3098,7 +3463,7 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
         except Exception as e:
-            QMessageBox.warning(self, "Ошибка импорта", str(e))
+            QMessageBox.warning(self, self.tr("Ошибка импорта"), str(e))
         finally:
             try:
                 self._importing = False
@@ -3110,7 +3475,7 @@ class MainWindow(QMainWindow):
         try:
             path, _ = QFileDialog.getOpenFileName(
                 self,
-                "Импорт базы компонентов (CSV)",
+                self.tr("Импорт базы компонентов (CSV)"),
                 str(DATA_DIR),
                 "CSV Files (*.csv);;All Files (*)",
             )
@@ -3128,24 +3493,28 @@ class MainWindow(QMainWindow):
                 pass
             QMessageBox.information(
                 self,
-                "Импорт базы компонентов",
-                f"Добавлено: {stats.get('added',0)}\nОбновлено: {stats.get('updated',0)}\nПропущено: {stats.get('skipped',0)}",
+                self.tr("Импорт базы компонентов"),
+                self.tr("Добавлено: {added}\nОбновлено: {updated}\nПропущено: {skipped}").format(
+                    added=stats.get('added',0),
+                    updated=stats.get('updated',0),
+                    skipped=stats.get('skipped',0)
+                ),
             )
         except Exception as e:
-            QMessageBox.warning(self, "Ошибка импорта базы компонентов", str(e))
+            QMessageBox.warning(self, self.tr("Ошибка импорта базы компонентов"), str(e))
 
     def import_component_db_xlsx(self) -> None:
         if openpyxl is None:
             QMessageBox.warning(
                 self,
-                "Excel импорт",
-                "Для импорта из Excel требуется пакет openpyxl.",
+                self.tr("Excel импорт"),
+                self.tr("Для импорта из Excel требуется пакет openpyxl."),
             )
             return
         try:
             path, _ = QFileDialog.getOpenFileName(
                 self,
-                "Импорт базы компонентов (Excel)",
+                self.tr("Импорт базы компонентов (Excel)"),
                 str(DATA_DIR),
                 "Excel Files (*.xlsx);;All Files (*)",
             )
@@ -3162,11 +3531,15 @@ class MainWindow(QMainWindow):
                 pass
             QMessageBox.information(
                 self,
-                "Импорт базы компонентов",
-                f"Добавлено: {stats.get('added',0)}\nОбновлено: {stats.get('updated',0)}\nПропущено: {stats.get('skipped',0)}",
+                self.tr("Импорт базы компонентов"),
+                self.tr("Добавлено: {added}\nОбновлено: {updated}\nПропущено: {skipped}").format(
+                    added=stats.get('added',0),
+                    updated=stats.get('updated',0),
+                    skipped=stats.get('skipped',0)
+                ),
             )
         except Exception as e:
-            QMessageBox.warning(self, "Ошибка импорта базы компонентов", str(e))
+            QMessageBox.warning(self, self.tr("Ошибка импорта базы компонентов"), str(e))
 
     # CSV-экспорт базы компонентов удалён; используйте экспорт в Excel.
 
@@ -3174,23 +3547,23 @@ class MainWindow(QMainWindow):
         if openpyxl is None:
             QMessageBox.warning(
                 self,
-                "Excel экспорт",
-                "Для экспорта в Excel требуется пакет openpyxl.",
+                self.tr("Excel экспорт"),
+                self.tr("Для экспорта в Excel требуется пакет openpyxl."),
             )
             return
         try:
             path, _ = QFileDialog.getSaveFileName(
                 self,
-                "Экспорт базы компонентов (Excel)",
+                self.tr("Экспорт базы компонентов (Excel)"),
                 str(DATA_DIR / "components.xlsx"),
                 "Excel Files (*.xlsx);;All Files (*)",
             )
             if not path:
                 return
             export_component_db_to_xlsx(path)
-            QMessageBox.information(self, "Экспорт базы компонентов", "Готово.")
+            QMessageBox.information(self, self.tr("Экспорт базы компонентов"), self.tr("Готово."))
         except Exception as e:
-            QMessageBox.warning(self, "Ошибка экспорта базы компонентов", str(e))
+            QMessageBox.warning(self, self.tr("Ошибка экспорта базы компонентов"), str(e))
 
     def _can_compute_sigma_k(self) -> bool:
         """Return True if we have enough validated inputs to compute sigma and k."""
@@ -3335,31 +3708,44 @@ class MainWindow(QMainWindow):
             pass
 
     def on_calc(self) -> bool:
-        # If suppression is active (import just happened), ignore programmatic calls.
-        if getattr(self, "_suppress_full_calc_after_import", False):
-            return False
+        # Программные вызовы не блокируем — пересчёт должен выполняться при необходимости.
         cold = self.cold_panel.to_dict()
         hot = self.hot_panel.to_dict()
         cold_mix = self.cold_mix.mix_rows()
         hot_mix = self.hot_mix.mix_rows()
-        # Before computing sigma/K require that user provided either Q or T_out (hot).
-        q_text = self.out_panel.q.text().strip()
-        t_out_text = self.hot_panel.t_out.text().strip()
-        # If both fields are empty, refuse to compute sigma/K and inform user.
-        if (not q_text) and (not t_out_text):
-            QMessageBox.warning(
-                self,
-                self.tr("Невозможно вычислить"),
-                (
-                    self.tr(
-                        "σ и K не могут быть посчитаны, потому что неизвестны Q и T_out (hot).\n"
+        # Раньше требовалось обязательное Q или T_out(hot). Теперь доверим logic.calculate
+        # попытаться вывести недостающие величины, если это возможно.
+        # Дополнительно: если ни Q, ни T⁺out не указаны — не запускаем расчёт и показываем подсказку,
+        # чтобы не создавать впечатление успешного пустого расчёта.
+        try:
+            q_present = bool(self.out_panel.q.text().strip())
+            hot_tout_present = bool(self.hot_panel.t_out.text().strip())
+            if not (q_present or hot_tout_present):
+                try:
+                    app_inst = QApplication.instance()
+                    active_lang = str(getattr(app_inst, "_app_translator_lang", "") or "").lower() if app_inst else ""
+                    desired = str(QSettings().value("ui/language", "ru") or "ru").lower()
+                    is_en = active_lang.startswith("en") or desired == "en"
+                except Exception:
+                    is_en = False
+                if is_en:
+                    title = "Calculation"
+                    text = (
+                        "Enter either heat load Q or hot stream outlet temperature T⁺out — "
+                        "one of them is required."
                     )
-                    + self.tr(
-                        "Пожалуйста, заполните Q или T_out горячего потока вручную и повторите попытку."
+                else:
+                    title = self.tr("Расчёт")
+                    text = self.tr(
+                        "Введите тепловую нагрузку Q или температуру выхода горячего потока T⁺out — "
+                        "требуется минимум одно из этих значений."
                     )
-                ),
-            )
-            return False
+                QMessageBox.information(self, title, text)
+                return False
+        except Exception:
+            pass
+        # примечание: ранее использовалась локальная переменная q_text для проверок,
+        # сейчас логика рассчитывает недостающие значения без предварительного отказа
         q_val = to_float(self.out_panel.q.text())
         schema = self.hydro.current_schema()
 
@@ -3481,12 +3867,12 @@ class MainWindow(QMainWindow):
             else:
                 QMessageBox.information(
                     self,
-                    "Расчёт",
-                    "Функция расчёта в logic.py не найдена. Заполните её.",
+                    self.tr("Расчёт"),
+                    self.tr("Функция расчёта в logic.py не найдена. Заполните её."),
                 )
                 return False
         except Exception as e:
-            QMessageBox.warning(self, "Ошибка расчёта", str(e))
+            QMessageBox.warning(self, self.tr("Ошибка расчёта"), str(e))
             return False
         return True
 
@@ -3769,8 +4155,7 @@ class MainWindow(QMainWindow):
 
     def show_license_dialog(self) -> None:
         try:
-            base_dir = Path(os.path.dirname(os.path.abspath(__file__)))
-            lic_path = base_dir / "Лицензионное_соглашение.txt"
+            lic_path = resource_path("Лицензионное_соглашение.txt")
             if not lic_path.exists():
                 QMessageBox.information(
                     self,
@@ -3808,16 +4193,24 @@ class MainWindow(QMainWindow):
             except Exception:
                 force_en = False
 
-            version_path = Path(os.path.dirname(os.path.abspath(__file__))) / "VERSION"
+            version_path = resource_path("VERSION")
             version = "неизвестно"
             if version_path.exists():
                 try:
                     version = version_path.read_text(encoding="utf-8").strip()
                 except Exception:
                     pass
-            mtime = datetime.fromtimestamp(os.path.getmtime(__file__)).strftime(
-                "%Y-%m-%d %H:%M"
-            )
+            try:
+                if getattr(sys, "frozen", False):
+                    # In PyInstaller onefile use executable timestamp
+                    mtime_src = Path(sys.executable)
+                else:
+                    mtime_src = Path(__file__)
+                mtime = datetime.fromtimestamp(mtime_src.stat().st_mtime).strftime(
+                    "%Y-%m-%d %H:%M"
+                )
+            except Exception:
+                mtime = "unknown"
 
             if force_en:
                 text = (
@@ -3844,6 +4237,49 @@ class MainWindow(QMainWindow):
 
     # --- Окно анализа ---
     def open_analysis_window(self) -> None:
+        # Не открывать окно анализа, если выходные параметры неизвестны или устарели
+        try:
+            explicit_done = bool(getattr(self, "_explicit_calc_done", False))
+            results_stale = bool(getattr(self, "_results_stale", False))
+            # язык для сообщений
+            try:
+                app_inst = QApplication.instance()
+                active_lang = str(getattr(app_inst, "_app_translator_lang", "") or "").lower() if app_inst else ""
+                desired = str(QSettings().value("ui/language", "ru") or "ru").lower()
+                is_en = active_lang.startswith("en") or desired == "en"
+            except Exception:
+                is_en = False
+            if not explicit_done:
+                if is_en:
+                    QMessageBox.information(
+                        self,
+                        "Analysis",
+                        "Run 'Calculate' first — output parameters (Q or T⁺out, σ and K) are required for analysis.",
+                    )
+                else:
+                    QMessageBox.information(
+                        self,
+                        self.tr("Анализ"),
+                        self.tr("Сначала выполните расчёт — выходные параметры (Q или T⁺out, σ и K) необходимы для анализа."),
+                    )
+                return
+            if results_stale:
+                if is_en:
+                    QMessageBox.information(
+                        self,
+                        "Analysis",
+                        "Inputs were changed. Press 'Recalculate' before opening analysis.",
+                    )
+                else:
+                    QMessageBox.information(
+                        self,
+                        self.tr("Анализ"),
+                        self.tr("Входные данные изменены. Нажмите 'Перерасчёт' перед открытием анализа."),
+                    )
+                return
+        except Exception:
+            # Если проверка не удалась, не блокируем, но стараемся продолжить с существующей логикой
+            pass
         try:
             from analysis_interface import AnalysisWindow  # type: ignore
         except Exception as e:
@@ -3924,7 +4360,10 @@ class MainWindow(QMainWindow):
                     cur = self._relevant_inputs_snapshot()
                     last = getattr(self, "_last_calc_snapshot", None)
                     if last is None:
-                        # no previous successful calculation snapshot -> do not show recalc
+                        # no previous successful calculation snapshot -> cannot determine delta
+                        # всё равно дадим возможность пересчёта
+                        self.recalc_btn.show()
+                        self.calc_btn.hide()
                         return
                     else:
                         if (
@@ -3932,6 +4371,7 @@ class MainWindow(QMainWindow):
                             and self._mix_valid(self.cold_mix.mix_rows())
                             and self._mix_valid(self.hot_mix.mix_rows())
                         ):
+                            # Показать кнопку пересчёта — пересчёт только по нажатию
                             self.recalc_btn.show()
                             self.calc_btn.hide()
                 except Exception:
@@ -3953,74 +4393,11 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
-        # Quick pre-check: if we don't have enough validated inputs, inform user instead of calling on_calc
+        # Перед явным пересчётом попробуем минимально автозаполнить недостающие Q/T+out
         try:
-            can_compute = self._can_compute_sigma_k()
+            self._auto_calc_minimal()
         except Exception:
-            can_compute = False
-
-        if not can_compute:
-            try:
-                # build helpful message listing missing/invalid parts
-                parts: List[str] = []
-                try:
-                    if (
-                        not self.out_panel.q.text().strip()
-                        and not self.hot_panel.t_out.text().strip()
-                    ):
-                        parts.append(
-                            "Q или T_out (hot) — хотя бы одно из них должно быть заполнено"
-                        )
-                except Exception:
-                    parts.append("Q/T_out — недоступно")
-                try:
-                    if not self.cold_panel.t_in.text().strip():
-                        parts.append("Cold T_in (вход холодного потока)")
-                    if not self.cold_panel.t_out.text().strip():
-                        parts.append("Cold T_out (выход холодного потока)")
-                    if not self.cold_panel.m.text().strip():
-                        parts.append("Cold m (расход холодного потока)")
-                except Exception:
-                    parts.append("Поля холодного потока — недоступны")
-                try:
-                    if not self.hot_panel.t_in.text().strip():
-                        parts.append("Hot T_in (вход горячего потока)")
-                    if not self.hot_panel.t_out.text().strip():
-                        parts.append("Hot T_out (выход горячего потока)")
-                    if not self.hot_panel.m.text().strip():
-                        parts.append("Hot m (расход горячего потока)")
-                except Exception:
-                    parts.append("Поля горячего потока — недоступны")
-                try:
-                    if not self._mix_valid(self.cold_mix.mix_rows()):
-                        parts.append(
-                            "Смесь холодного потока: суммы долей должны равняться 1"
-                        )
-                except Exception:
-                    parts.append("Смесь холодного потока — недоступна")
-                try:
-                    if not self._mix_valid(self.hot_mix.mix_rows()):
-                        parts.append(
-                            "Смесь горячего потока: суммы долей должны равняться 1"
-                        )
-                except Exception:
-                    parts.append("Смесь горячего потока — недоступна")
-
-                body = (
-                    "Невозможно выполнить пересчёт σ/K — не хватает входных данных:\n\n"
-                    + "\n".join(f"- {p}" for p in parts)
-                )
-                QMessageBox.warning(self, "Перерасчёт — недостаточно данных", body)
-            except Exception:
-                try:
-                    QMessageBox.warning(
-                        self,
-                        "Перерасчёт",
-                        "Недостаточно данных для пересчёта σ/K. Заполните, пожалуйста, необходимые поля.",
-                    )
-                except Exception:
-                    pass
-            return
+            pass
 
         success = False
         res_val = None
@@ -4074,25 +4451,27 @@ class MainWindow(QMainWindow):
                         cur_snap = {}
                     last_snap = getattr(self, "_last_calc_snapshot", None)
                     diag = (
-                        f"Перерасчёт не выполнен.\n\n"
-                        f"Внутреннее состояние:\n"
-                        f"_suppress_full_calc_after_import={getattr(self, '_suppress_full_calc_after_import', None)}\n"
-                        f"_post_import_changed={getattr(self, '_post_import_changed', None)}\n"
-                        f"_results_stale={getattr(self, '_results_stale', None)}\n"
-                        f"Q='{q_txt}'  T_out='{t_out_txt}'  can_compute={can_compute}\n\n"
-                        f"last_snapshot={last_snap}\n"
-                        f"current_snapshot={cur_snap}\n\n"
-                        f"on_calc returned: {res_val!r}\n"
-                        f"exception: {err_msg or '<none>'}"
+                        self.tr("Перерасчёт не выполнен.")
+                        + "\n\n"
+                        + self.tr("Внутреннее состояние:")
+                        + "\n"
+                        + f"_suppress_full_calc_after_import={getattr(self, '_suppress_full_calc_after_import', None)}\n"
+                        + f"_post_import_changed={getattr(self, '_post_import_changed', None)}\n"
+                        + f"_results_stale={getattr(self, '_results_stale', None)}\n"
+                        + f"Q='{q_txt}'  T_out='{t_out_txt}'  can_compute={can_compute}\n\n"
+                        + f"last_snapshot={last_snap}\n"
+                        + f"current_snapshot={cur_snap}\n\n"
+                        + f"on_calc returned: {res_val!r}\n"
+                        + f"exception: {err_msg or '<none>'}"
                     )
-                    QMessageBox.warning(self, "Перерасчёт", diag)
+                    QMessageBox.warning(self, self.tr("Перерасчёт"), diag)
                 except Exception:
                     # fallback simple message
                     try:
                         QMessageBox.warning(
                             self,
-                            "Перерасчёт",
-                            "Перерасчёт не выполнен — проверьте входные данные или сообщение об ошибке.",
+                            self.tr("Перерасчёт"),
+                            self.tr("Перерасчёт не выполнен — проверьте входные данные или сообщение об ошибке."),
                         )
                     except Exception:
                         pass
@@ -4210,11 +4589,7 @@ class MainWindow(QMainWindow):
             self._suppress_full_calc_after_import = False
         except Exception:
             pass
-        # after normalizing inputs, attempt only the minimal auto-calc helper
-        try:
-            self._try_auto_calc()
-        except Exception:
-            pass
+        # после нормализации ничего не считаем автоматически
         try:
             self._update_calc_button_state()
         except Exception:
@@ -4254,6 +4629,29 @@ class MainWindow(QMainWindow):
                     self._auto_calc_minimal()
                     return
             # otherwise do nothing
+        except Exception:
+            pass
+
+    def _on_any_input_changed(self) -> None:
+        """Реакция на любое завершение ввода ключевых полей после успешного явного расчёта.
+        Показывает кнопку «Перерасчёт», выполняет авто‑дозаполнение и полный пересчёт значений
+        без обновления снимка, оставляя результаты помеченными как устаревшие до подтверждения.
+        """
+        try:
+            if not getattr(self, "_explicit_calc_done", False):
+                return
+            # показать кнопку «Перерасчёт», скрыть «Вычислить»
+            try:
+                self._results_stale = True
+                self.recalc_btn.show()
+                self.calc_btn.hide()
+            except Exception:
+                pass
+            # Только помечаем как устаревшие и ждём явного подтверждения пользователем
+            try:
+                self._suppress_full_calc_after_import = False
+            except Exception:
+                pass
         except Exception:
             pass
 

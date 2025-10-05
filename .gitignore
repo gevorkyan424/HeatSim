@@ -1,4 +1,13 @@
-# Byte-compiled / optimized / DLL files
+.venv/
+__pycache__/
+*.pyc
+dist/
+build/
+logs/
+.VSCodeCounter/
+.pytest_cache/
+.mypy_cache/
+*.spec.bak# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class

@@ -29,16 +29,24 @@ if (Test-Path "requirements.txt") {
 Write-Host "Ensuring PyInstaller is installed..."
 python -m pip install pyinstaller
 
-# Prepare --add-data arguments for assets and data folders
+# Prepare --add-data arguments for assets, data, i18n and top-level files
 $assets = Join-Path $Here "assets"
 $data = Join-Path $Here "data"
+$i18n = Join-Path $Here "i18n"
+$versionFile = Join-Path $Here "VERSION"
+$licenseRu = Join-Path $Here "Лицензионное_соглашение.txt"
 
 # PyInstaller on Windows expects paths in the form "SRC;DEST"
-$add1 = "${assets};assets"
-$add2 = "${data};data"
+$addData = @()
+if (Test-Path $assets) { $addData += @("${assets};assets") }
+if (Test-Path $data) { $addData += @("${data};data") }
+if (Test-Path $i18n) { $addData += @("${i18n};i18n") }
+if (Test-Path $versionFile) { $addData += @("${versionFile};VERSION") }
+if (Test-Path $licenseRu) { $addData += @("${licenseRu};Лицензионное_соглашение.txt") }
 
 Write-Host "Running PyInstaller via module to avoid PATH issues..."
-$pyargs = @("--noconfirm", "--onefile", "--windowed", "--name", "HeatSim", "--add-data", $add1, "--add-data", $add2)
+$pyargs = @("--noconfirm", "--onefile", "--windowed", "--name", "HeatSim")
+foreach ($ad in $addData) { $pyargs += @("--add-data", $ad) }
 # include icon if present
 $iconPath = Join-Path $Here "assets\icon.ico"
 if (Test-Path $iconPath) { $pyargs += @("--icon", $iconPath) }
@@ -51,8 +59,8 @@ if ($LASTEXITCODE -eq 0) {
     # Path to produced exe
     $exePath = Join-Path $Here "dist\HeatSim.exe"
 
-    # Copy LICENSE and EULA into dist for distribution
-    $filesToCopy = @("LICENSE", "EULA.txt")
+    # Copy LICENSE and RU license agreement text into dist for distribution
+    $filesToCopy = @("LICENSE", "Лицензионное_соглашение.txt")
     foreach ($f in $filesToCopy) {
         $src = Join-Path $Here $f
         if (Test-Path $src) {
@@ -106,4 +114,4 @@ else {
     Write-Host "Build finished with errors (exit code $LASTEXITCODE)." -ForegroundColor Yellow
 }
 
-Write-Host "Note: If your app still fails to start, try running the executable from a console to see missing DLL/plugin errors."n
+Write-Host "Note: If your app still fails to start, try running the executable from a console to see missing DLL/plugin errors."

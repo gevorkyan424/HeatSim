@@ -32,12 +32,14 @@ def fix_ts_text(text: str) -> str:
         "quot": "&quot;",
         "apos": "&apos;",
     }
+
     def _ent_sub(m: Any) -> str:
         name: str = str(m.group(1))
         rep = entity_map.get(name)
         if rep is None:
             return str(m.group(0))
         return rep
+
     out = re.sub(r"&\s*(gt|lt|amp|quot|apos)\s*;", _ent_sub, out)
     return out
 

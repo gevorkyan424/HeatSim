@@ -1,0 +1,10 @@
+# Development-only tools (optional)
+# Qt translation tools (either install full Qt or PySide6 for lrelease)
+PySide6==6.9.2
+PySide6_Addons==6.9.2
+PySide6_Essentials==6.9.2
+shiboken6==6.9.2
+
+# Lint/type/test (add as needed)
+pyinstaller==6.11.1
+pytest>=8.0.0

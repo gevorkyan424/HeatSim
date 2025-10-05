@@ -30,12 +30,13 @@ $lrelease = $null
 if ($LReleasePath) {
     if (Test-Path $LReleasePath) {
         $lrelease = $LReleasePath
-    } else {
+    }
+    else {
         Write-Warning "Provided lrelease path does not exist: $LReleasePath"
     }
 }
 if (-not $lrelease) {
-    $lrelease = Find-Tool @('lrelease.exe','lrelease','lrelease6','lrelease-qt5','lrelease-qt6','pyside6-lrelease')
+    $lrelease = Find-Tool @('lrelease.exe', 'lrelease', 'lrelease6', 'lrelease-qt5', 'lrelease-qt6', 'pyside6-lrelease')
 }
 if (-not $lrelease) {
     Write-Warning 'lrelease not found in PATH. Install Qt Linguist tools or add them to PATH.'
