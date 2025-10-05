@@ -4,12 +4,12 @@ on:
   workflow_dispatch:
     inputs:
       tag_name:
-        description: 'Tag to create/update release for (e.g., v1.8)'
+        description: "Tag to create/update release for (e.g., v1.8)"
         required: false
         type: string
   push:
     tags:
-      - 'v*'
+      - "v*"
 
 jobs:
   build-windows:
@@ -23,7 +23,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
       - name: Install dependencies
         shell: pwsh
@@ -43,12 +43,19 @@ jobs:
           name: HeatSim-windows-exe
           path: dist/HeatSim.exe
 
+      - name: Generate SHA-256 checksum
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash -Algorithm SHA256 .\dist\HeatSim.exe).Hash
+          "${hash}  HeatSim.exe" | Out-File -FilePath .\dist\HeatSim.exe.sha256 -Encoding ascii -NoNewline
+
       - name: Create GitHub Release and upload asset
         uses: softprops/action-gh-release@v2
         # On tag push, github.ref is refs/tags/<tag>; on manual run, provide inputs.tag_name
         with:
           files: |
             dist/HeatSim.exe
+            dist/HeatSim.exe.sha256
           name: ${{ github.ref_name != '' && github.ref_name || github.event.inputs.tag_name }}
           tag_name: ${{ github.event.inputs.tag_name }}
           generate_release_notes: true
