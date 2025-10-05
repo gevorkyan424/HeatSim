@@ -1,13 +1,20 @@
 name: Build HeatSim (Windows)
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Tag to create/update release for (e.g., v1.8)'
+        required: false
+        type: string
   push:
     tags:
       - 'v*'
 
 jobs:
   build-windows:
+    permissions:
+      contents: write
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -35,3 +42,16 @@ jobs:
         with:
           name: HeatSim-windows-exe
           path: dist/HeatSim.exe
+
+      - name: Create GitHub Release and upload asset
+        uses: softprops/action-gh-release@v2
+        # On tag push, github.ref is refs/tags/<tag>; on manual run, provide inputs.tag_name
+        with:
+          files: |
+            dist/HeatSim.exe
+          name: ${{ github.ref_name != '' && github.ref_name || github.event.inputs.tag_name }}
+          tag_name: ${{ github.event.inputs.tag_name }}
+          generate_release_notes: true
+          draft: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
