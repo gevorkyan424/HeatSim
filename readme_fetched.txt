@@ -207,15 +207,6 @@ python -m pip install PyQt5
 
 - Автосборка по тэгу: создан workflow `.github/workflows/release.yml`. При пуше тега вида `v*` CI собирает exe и публикует релиз с ассетом.
 
-## Подпись исполняемого файла
-
-Подготовьте PFX с код‑подписью и установите Windows SDK (`signtool.exe`). Затем:
-```powershell
-$pwd = Read-Host -AsSecureString "PFX password"
-.\sign_exe.ps1 -PfxPath 'C:\path\to\yourcert.pfx' -PfxPassword $pwd
-```
-Если `signtool.exe` не в PATH, откройте скрипт и пропишите полный путь.
-
 ---
 
 Если нужно, допишу README на английском или добавлю пример CSV для импорта/экспорта смесей. Скажите, какие ещё разделы добавить.
