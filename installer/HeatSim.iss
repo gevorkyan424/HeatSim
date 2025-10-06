@@ -3,9 +3,9 @@
 #define AppPublisher "HeatSim"
 #define AppURL "https://github.com/gevorkyan424/HeatSim"
 #define AppExeName "HeatSim.exe"
-; Passed via command line: /DAppVersion=1.8 /DProjectRoot=C:\path\to\repo
+; Passed via command line: /DAppVersion=1.9 /DProjectRoot=C:\path\to\repo
 #ifndef AppVersion
-  #define AppVersion "1.8"
+  #define AppVersion "1.9"
 #endif
 #ifndef ProjectRoot
   #error "ProjectRoot is not defined. Pass /DProjectRoot=... to ISCC."
@@ -18,7 +18,8 @@ AppVersion={#AppVersion}
 AppPublisher={#AppPublisher}
 AppPublisherURL={#AppURL}
 AppSupportURL={#AppURL}
-DefaultDirName={autopf}\{#AppName}
+; Per-user by default; user can choose any folder
+DefaultDirName={localappdata}\Programs\{#AppName}
 DefaultGroupName={#AppName}
 DisableDirPage=no
 DisableProgramGroupPage=yes
