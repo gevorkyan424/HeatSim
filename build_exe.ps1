@@ -1,8 +1,5 @@
 Param(
-    [switch]$CreateVenv,
-    [string]$SignPfx = "",         # Path to .pfx certificate for signing (optional)
-    [string]$SignPassword = "",    # Password for the .pfx (optional)
-    [switch]$Timestamp = $true      # Use RFC3161 timestamp server when signing
+    [switch]$CreateVenv
 )
 
 $Here = Split-Path -Parent $MyInvocation.MyCommand.Definition
@@ -69,46 +66,6 @@ if ($LASTEXITCODE -eq 0) {
         }
     }
 
-    # Optional signing step (temporarily disabled)
-    # To enable signing later, uncomment the block below and provide -SignPfx and -SignPassword when running the script.
-    #if ($SignPfx -and (Test-Path $SignPfx)) {
-    #    Write-Host "Signing executable using PFX: $SignPfx"
-    #    $signtool = Get-Command signtool -ErrorAction SilentlyContinue
-    #    if ($signtool) {
-    #        $tsArg = ""
-    #        if ($Timestamp) { $tsArg = "/tr http://timestamp.digicert.com /td sha256" }
-    #        try {
-    #            & signtool sign /f $SignPfx /p $SignPassword $tsArg /fd sha256 $exePath
-    #            if ($LASTEXITCODE -eq 0) { Write-Host "SignTool: signing succeeded." -ForegroundColor Green }
-    #            else { Write-Warning "SignTool: signing finished with exit code $LASTEXITCODE" }
-    #        }
-    #        catch {
-    #            Write-Warning "SignTool signing failed: $_"
-    #        }
-    #    }
-    #    else {
-    #        try {
-    #            $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($SignPfx, $SignPassword, [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::Exportable)
-    #            if ($cert) {
-    #                if ($Timestamp) {
-    #                    $timestampServer = "http://timestamp.digicert.com"
-    #                    $sig = Set-AuthenticodeSignature -FilePath $exePath -Certificate $cert -TimestampServer $timestampServer
-    #                }
-    #                else {
-    #                    $sig = Set-AuthenticodeSignature -FilePath $exePath -Certificate $cert
-    #                }
-    #                if ($sig.Status -eq 'Valid') { Write-Host "Authenticode: signing succeeded." -ForegroundColor Green }
-    #                else { Write-Warning "Authenticode: signing status: $($sig.Status)" }
-    #            }
-    #        }
-    #        catch {
-    #            Write-Warning "Authenticode signing failed: $_"
-    #        }
-    #    }
-    #}
-    #else {
-    #    Write-Host "No signing certificate provided or file not found; skipping signing." -ForegroundColor Yellow
-    #}
 }
 else {
     Write-Host "Build finished with errors (exit code $LASTEXITCODE)." -ForegroundColor Yellow
