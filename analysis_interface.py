@@ -864,7 +864,9 @@ class AnalysisWindow(QDialog):
             QMessageBox.warning(
                 self,
                 self.tr("Анализ"),
-                self.tr("Сумма долей должна быть = 1.0 (текущая: {val:.6f}).").format(val=total),
+                self.tr("Сумма долей должна быть = 1.0 (текущая: {val:.6f}).").format(
+                    val=total
+                ),
             )
             return
         self._set_table_editable(table, False)
@@ -960,10 +962,7 @@ class AnalysisWindow(QDialog):
         try:
             default_name = os.path.join(os.path.expanduser("~"), "analysis_report.pdf")
             path, _ = QFileDialog.getSaveFileName(
-                self,
-                self.tr("Сохранить отчёт (PDF)"),
-                default_name,
-                "PDF (*.pdf)"
+                self, self.tr("Сохранить отчёт (PDF)"), default_name, "PDF (*.pdf)"
             )
             if not path:
                 return
@@ -1038,54 +1037,59 @@ class AnalysisWindow(QDialog):
         # Создаёт титульную страницу с исходными параметрами и схемой
         fig = Figure(figsize=(8.27, 11.69))  # A4 портретная
         ax = fig.add_subplot(111)
-        ax.axis('off')
+        ax.axis("off")
         # Заголовки/текст
         title = self.tr("Отчёт анализа HeatSim")
         schema_txt = f"{self.tr('Схема')}: {self._schema}"
-        ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         when = f"{self.tr('Дата/время')}: {ts}"
+
         # Потоки
         def fmt_flow(name: str, flow: Dict[str, float]) -> str:
-            t_in = flow.get('t_in', 0.0)
-            t_out = flow.get('t_out', 0.0)
-            m = flow.get('m', 0.0)
+            t_in = flow.get("t_in", 0.0)
+            t_out = flow.get("t_out", 0.0)
+            m = flow.get("m", 0.0)
             return f"{name}: T_in={t_in:.3f} K, T_out={t_out:.3f} K, m={m:.6f} kg/s"
-        cold_line = fmt_flow(self.tr('Холодный поток'), self._base_cold_flow)
-        hot_line = fmt_flow(self.tr('Горячий поток'), self._base_hot_flow)
+
+        cold_line = fmt_flow(self.tr("Холодный поток"), self._base_cold_flow)
+        hot_line = fmt_flow(self.tr("Горячий поток"), self._base_hot_flow)
+
         # Смеси: имя и доля
         def fmt_mix(title: str, mix: List[Dict[str, Any]]) -> str:
             parts: List[str] = []
             for comp in mix:
-                name = str(comp.get('name', ''))
-                share = float(comp.get('share', 0.0))
+                name = str(comp.get("name", ""))
+                share = float(comp.get("share", 0.0))
                 parts.append(f"- {name}: {share:.4f}")
             return title + "\n" + "\n".join(parts)
-        cold_mix_txt = fmt_mix(self.tr('Состав холодной смеси'), self._base_cold_mix)
-        hot_mix_txt = fmt_mix(self.tr('Состав горячей смеси'), self._base_hot_mix)
+
+        cold_mix_txt = fmt_mix(self.tr("Состав холодной смеси"), self._base_cold_mix)
+        hot_mix_txt = fmt_mix(self.tr("Состав горячей смеси"), self._base_hot_mix)
         text = (
             f"{title}\n\n"
             f"{schema_txt}\n{when}\n\n"
             f"{cold_line}\n{hot_line}\n\n"
             f"{cold_mix_txt}\n\n{hot_mix_txt}"
         )
-        ax.text(0.05, 0.95, text, va='top', ha='left', fontsize=11)
+        ax.text(0.05, 0.95, text, va="top", ha="left", fontsize=11)
         return fig
 
 
 class _ExportPdfOptionsDialog(QDialog):
     """Диалог выбора страниц для экспорта PDF."""
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle(self.tr('Экспорт PDF'))
+        self.setWindowTitle(self.tr("Экспорт PDF"))
         self.setModal(True)
         v = QVBoxLayout(self)
-        self.lbl = QLabel(self.tr('Что экспортировать?'))
+        self.lbl = QLabel(self.tr("Что экспортировать?"))
         v.addWidget(self.lbl)
         hb = QHBoxLayout()
         v.addLayout(hb)
-        self.btn_combined = QPushButton(self.tr('Комбинированные'))
-        self.btn_split = QPushButton(self.tr('Раздельные'))
-        self.btn_both = QPushButton(self.tr('Оба'))
+        self.btn_combined = QPushButton(self.tr("Комбинированные"))
+        self.btn_split = QPushButton(self.tr("Раздельные"))
+        self.btn_both = QPushButton(self.tr("Оба"))
         hb.addWidget(self.btn_combined)
         hb.addWidget(self.btn_split)
         hb.addWidget(self.btn_both)

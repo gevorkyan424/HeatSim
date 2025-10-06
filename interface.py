@@ -592,7 +592,9 @@ def set_enabled(le: QLineEdit, enabled: bool) -> None:
 def lock_button_for(line_edit: QLineEdit) -> QPushButton:
     btn = QPushButton()
     btn.setFixedSize(22, 22)
-    btn.setToolTip(QCoreApplication.translate("UI", "Заблокировать/разблокировать поле"))
+    btn.setToolTip(
+        QCoreApplication.translate("UI", "Заблокировать/разблокировать поле")
+    )
 
     def on_click():
         # if the field is enabled -> lock it; otherwise unlock
@@ -3494,14 +3496,18 @@ class MainWindow(QMainWindow):
             QMessageBox.information(
                 self,
                 self.tr("Импорт базы компонентов"),
-                self.tr("Добавлено: {added}\nОбновлено: {updated}\nПропущено: {skipped}").format(
-                    added=stats.get('added',0),
-                    updated=stats.get('updated',0),
-                    skipped=stats.get('skipped',0)
+                self.tr(
+                    "Добавлено: {added}\nОбновлено: {updated}\nПропущено: {skipped}"
+                ).format(
+                    added=stats.get("added", 0),
+                    updated=stats.get("updated", 0),
+                    skipped=stats.get("skipped", 0),
                 ),
             )
         except Exception as e:
-            QMessageBox.warning(self, self.tr("Ошибка импорта базы компонентов"), str(e))
+            QMessageBox.warning(
+                self, self.tr("Ошибка импорта базы компонентов"), str(e)
+            )
 
     def import_component_db_xlsx(self) -> None:
         if openpyxl is None:
@@ -3532,14 +3538,18 @@ class MainWindow(QMainWindow):
             QMessageBox.information(
                 self,
                 self.tr("Импорт базы компонентов"),
-                self.tr("Добавлено: {added}\nОбновлено: {updated}\nПропущено: {skipped}").format(
-                    added=stats.get('added',0),
-                    updated=stats.get('updated',0),
-                    skipped=stats.get('skipped',0)
+                self.tr(
+                    "Добавлено: {added}\nОбновлено: {updated}\nПропущено: {skipped}"
+                ).format(
+                    added=stats.get("added", 0),
+                    updated=stats.get("updated", 0),
+                    skipped=stats.get("skipped", 0),
                 ),
             )
         except Exception as e:
-            QMessageBox.warning(self, self.tr("Ошибка импорта базы компонентов"), str(e))
+            QMessageBox.warning(
+                self, self.tr("Ошибка импорта базы компонентов"), str(e)
+            )
 
     # CSV-экспорт базы компонентов удалён; используйте экспорт в Excel.
 
@@ -3561,9 +3571,13 @@ class MainWindow(QMainWindow):
             if not path:
                 return
             export_component_db_to_xlsx(path)
-            QMessageBox.information(self, self.tr("Экспорт базы компонентов"), self.tr("Готово."))
+            QMessageBox.information(
+                self, self.tr("Экспорт базы компонентов"), self.tr("Готово.")
+            )
         except Exception as e:
-            QMessageBox.warning(self, self.tr("Ошибка экспорта базы компонентов"), str(e))
+            QMessageBox.warning(
+                self, self.tr("Ошибка экспорта базы компонентов"), str(e)
+            )
 
     def _can_compute_sigma_k(self) -> bool:
         """Return True if we have enough validated inputs to compute sigma and k."""
@@ -3723,8 +3737,14 @@ class MainWindow(QMainWindow):
             if not (q_present or hot_tout_present):
                 try:
                     app_inst = QApplication.instance()
-                    active_lang = str(getattr(app_inst, "_app_translator_lang", "") or "").lower() if app_inst else ""
-                    desired = str(QSettings().value("ui/language", "ru") or "ru").lower()
+                    active_lang = (
+                        str(getattr(app_inst, "_app_translator_lang", "") or "").lower()
+                        if app_inst
+                        else ""
+                    )
+                    desired = str(
+                        QSettings().value("ui/language", "ru") or "ru"
+                    ).lower()
                     is_en = active_lang.startswith("en") or desired == "en"
                 except Exception:
                     is_en = False
@@ -4244,7 +4264,11 @@ class MainWindow(QMainWindow):
             # язык для сообщений
             try:
                 app_inst = QApplication.instance()
-                active_lang = str(getattr(app_inst, "_app_translator_lang", "") or "").lower() if app_inst else ""
+                active_lang = (
+                    str(getattr(app_inst, "_app_translator_lang", "") or "").lower()
+                    if app_inst
+                    else ""
+                )
                 desired = str(QSettings().value("ui/language", "ru") or "ru").lower()
                 is_en = active_lang.startswith("en") or desired == "en"
             except Exception:
@@ -4260,7 +4284,9 @@ class MainWindow(QMainWindow):
                     QMessageBox.information(
                         self,
                         self.tr("Анализ"),
-                        self.tr("Сначала выполните расчёт — выходные параметры (Q или T⁺out, σ и K) необходимы для анализа."),
+                        self.tr(
+                            "Сначала выполните расчёт — выходные параметры (Q или T⁺out, σ и K) необходимы для анализа."
+                        ),
                     )
                 return
             if results_stale:
@@ -4274,7 +4300,9 @@ class MainWindow(QMainWindow):
                     QMessageBox.information(
                         self,
                         self.tr("Анализ"),
-                        self.tr("Входные данные изменены. Нажмите 'Перерасчёт' перед открытием анализа."),
+                        self.tr(
+                            "Входные данные изменены. Нажмите 'Перерасчёт' перед открытием анализа."
+                        ),
                     )
                 return
         except Exception:
@@ -4471,7 +4499,9 @@ class MainWindow(QMainWindow):
                         QMessageBox.warning(
                             self,
                             self.tr("Перерасчёт"),
-                            self.tr("Перерасчёт не выполнен — проверьте входные данные или сообщение об ошибке."),
+                            self.tr(
+                                "Перерасчёт не выполнен — проверьте входные данные или сообщение об ошибке."
+                            ),
                         )
                     except Exception:
                         pass

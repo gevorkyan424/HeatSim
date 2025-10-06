@@ -22,8 +22,13 @@ if (-Not (Test-Path $exePath)) {
 # Find Inno Setup Compiler (ISCC)
 $iscc = Get-Command iscc -ErrorAction SilentlyContinue
 if (-not $iscc) {
-    $defaultIscc = "C:\\Program Files (x86)\\Inno Setup 6\\ISCC.exe"
-    if (Test-Path $defaultIscc) { $iscc = $defaultIscc }
+    $candidates = @()
+    if ($env:ProgramFiles) { $candidates += (Join-Path $env:ProgramFiles 'Inno Setup 6\ISCC.exe'); $candidates += (Join-Path $env:ProgramFiles 'Inno Setup 6\Bin\ISCC.exe') }
+    if (${env:ProgramFiles(x86)}) { $candidates += (Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'); $candidates += (Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\Bin\ISCC.exe') }
+    if ($env:LOCALAPPDATA) { $candidates += (Join-Path $env:LOCALAPPDATA 'Programs\Inno Setup 6\ISCC.exe'); $candidates += (Join-Path $env:LOCALAPPDATA 'Programs\Inno Setup 6\Bin\ISCC.exe') }
+    foreach ($p in $candidates) {
+        if (Test-Path $p) { $iscc = $p; break }
+    }
 }
 if (-not $iscc) {
     Write-Error "Inno Setup Compiler (ISCC) not found. Install Inno Setup 6 or add ISCC to PATH."
@@ -48,6 +53,7 @@ if ($LASTEXITCODE -ne 0) {
 $setupPath = Join-Path $ProjectRoot ("dist/HeatSim-Setup-v{0}.exe" -f $AppVersion)
 if (Test-Path $setupPath) {
     Write-Host "Installer created: $setupPath" -ForegroundColor Green
-} else {
+}
+else {
     Write-Warning "Installer not found at expected path: $setupPath"
 }
