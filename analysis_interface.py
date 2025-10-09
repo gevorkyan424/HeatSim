@@ -23,7 +23,7 @@ from PyQt5.QtWidgets import (
     QLabel,
     QFileDialog,
 )
-from PyQt5.QtCore import Qt, QTimer, QRegularExpression
+from PyQt5.QtCore import Qt, QTimer, QRegularExpression, QSettings
 from PyQt5.QtGui import QBrush, QColor, QRegularExpressionValidator
 
 try:
@@ -33,8 +33,12 @@ except Exception:  # fallback older name
 from matplotlib.figure import Figure
 from matplotlib.axes import Axes
 from matplotlib.backends.backend_pdf import PdfPages
+from matplotlib import image as mpimg
 import os
 from datetime import datetime
+import sys
+from pathlib import Path
+import csv
 
 # NOTE: analysis_logic will be integrated later for advanced variation logic
 # from analysis_logic import vary_component_shares
@@ -134,12 +138,18 @@ class AnalysisWindow(QDialog):
         self.export_btn.setEnabled(False)
         self.export_btn.hide()
         btn_row.addWidget(self.export_btn, 0, alignment=Qt.AlignVCenter)
+        # Кнопка экспорта данных (Excel/CSV)
+        self.export_data_btn = QPushButton(self.tr("Экспорт данных (Excel/CSV)"))
+        self.export_data_btn.setEnabled(False)
+        self.export_data_btn.hide()
+        btn_row.addWidget(self.export_data_btn, 0, alignment=Qt.AlignVCenter)
         layout.addLayout(btn_row)
         # Чекбокс появляется только после первого построения и далее не скрывается
         self.split_container.hide()
         self._split_available = False
         self.split_checkbox.setChecked(False)
         self.split_checkbox.toggled.connect(self._on_split_toggled)
+        self.export_data_btn.clicked.connect(self._on_export_data)
 
         # Blinking timer for the run button
         self._blink_timer = QTimer(self)
@@ -290,6 +300,15 @@ class AnalysisWindow(QDialog):
         self.run_btn.setStyleSheet(
             self._blink_alt_style if self._blink_on else self._blink_base_style
         )
+
+    @staticmethod
+    def _resource_path(*paths: str) -> Path:
+        """Return absolute path to an internal resource (works under PyInstaller)."""
+        try:
+            base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+        except Exception:
+            base = Path(__file__).resolve().parent
+        return (base.joinpath(*paths)).resolve()
 
     def _create_table(self, data: List[Dict[str, Any]]):
         table = QTableWidget()
@@ -554,6 +573,8 @@ class AnalysisWindow(QDialog):
             self.export_btn.setEnabled(bool(self._last_series_x))
             if self._last_series_x:
                 self.export_btn.show()
+                self.export_data_btn.setEnabled(True)
+                self.export_data_btn.show()
         except Exception:
             pass
         # Кнопка построения не используется — скрываем (на случай, если она где-то стала видимой)
@@ -973,23 +994,47 @@ class AnalysisWindow(QDialog):
             choice = _ExportPdfOptionsDialog.ask(self)
             if choice is None:
                 return
+            include_combined, include_split, include_tables = choice
+            # Подсчёт числа страниц для нумерации
+            total_pages = 1  # титульная
+            if include_combined:
+                total_pages += 1
+            if include_split:
+                total_pages += 1
+            if include_tables:
+                total_pages += 1
+
+            page_idx = 0
             # Создание PDF
             with PdfPages(path) as pdf:
                 # Страница 1: титульная с исходными данными
                 try:
                     fig_hdr = self._generate_header_figure()
+                    page_idx += 1
+                    num = self._add_page_number(fig_hdr, page_idx, total_pages)
                     pdf.savefig(fig_hdr)
+                    try:
+                        if num is not None:
+                            num.remove()
+                    except Exception:
+                        pass
                 except Exception:
                     pass
                 # Далее: выбранные страницы с графиками
-                include_combined, include_split = choice
                 if include_combined:
                     # Комбинированные
                     try:
                         self.fig.tight_layout()
                     except Exception:
                         pass
+                    page_idx += 1
+                    num = self._add_page_number(self.fig, page_idx, total_pages)
                     pdf.savefig(self.fig)
+                    try:
+                        if num is not None:
+                            num.remove()
+                    except Exception:
+                        pass
                 try:
                     if include_split:
                         sw = getattr(self, "_split_window", None)
@@ -1009,7 +1054,28 @@ class AnalysisWindow(QDialog):
                             sw.fig.tight_layout()
                         except Exception:
                             pass
+                        page_idx += 1
+                        num = self._add_page_number(sw.fig, page_idx, total_pages)
                         pdf.savefig(sw.fig)
+                        try:
+                            if num is not None:
+                                num.remove()
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+                # Таблицы исходных данных (опционально)
+                try:
+                    if include_tables:
+                        tables_fig = self._generate_tables_figure()
+                        page_idx += 1
+                        num = self._add_page_number(tables_fig, page_idx, total_pages)
+                        pdf.savefig(tables_fig)
+                        try:
+                            if num is not None:
+                                num.remove()
+                        except Exception:
+                            pass
                 except Exception:
                     pass
                 # Метаданные
@@ -1071,8 +1137,269 @@ class AnalysisWindow(QDialog):
             f"{cold_line}\n{hot_line}\n\n"
             f"{cold_mix_txt}\n\n{hot_mix_txt}"
         )
-        ax.text(0.05, 0.95, text, va="top", ha="left", fontsize=11)
+        try:
+            s = QSettings()
+            xy_str = s.value("Report/HeaderTextXY", "0.05,0.95")
+            tx, ty = [float(p.strip()) for p in str(xy_str).split(",")]
+        except Exception:
+            tx, ty = 0.05, 0.95
+        ax.text(tx, ty, text, va="top", ha="left", fontsize=11)
+
+        # Логотип (если имеется)
+        try:
+            logo_path = self._resource_path("assets", "icon.png")
+            if logo_path.exists():
+                img = mpimg.imread(str(logo_path))
+                # Размер и положение логотипа из настроек (Report/HeaderLogoRect)
+                s = QSettings()
+                rect_str = s.value("Report/HeaderLogoRect", "0.78,0.87,0.18,0.12")
+                try:
+                    x, y, w, h = [float(p.strip()) for p in str(rect_str).split(",")]
+                except Exception:
+                    x, y, w, h = 0.78, 0.87, 0.18, 0.12
+                ax_logo = fig.add_axes((x, y, w, h))  # x, y, w, h
+                ax_logo.imshow(img)
+                ax_logo.axis("off")
+        except Exception:
+            pass
         return fig
+
+    def _generate_tables_figure(self) -> Figure:
+        """Генерирует страницу с таблицами исходных данных (холодный/горячий)."""
+        fig = Figure(figsize=(8.27, 11.69))  # A4 портретная
+        # Две области: сверху и снизу
+        ax1 = fig.add_subplot(211)
+        ax2 = fig.add_subplot(212)
+        for ax in (ax1, ax2):
+            ax.axis("off")
+
+        headers = [
+            self.tr("Компонент"),
+            self.tr("Доля"),
+            self.tr("Tb, K"),
+            self.tr("C_f, кДж/(кг·К)"),
+            self.tr("C_p, кДж/(кг·К)"),
+            self.tr("r_f, кДж/кг"),
+        ]
+
+        def tbl_data(tbl: QTableWidget) -> list[list[str]]:
+            rows: list[list[str]] = []
+            for r in range(tbl.rowCount()):
+                row: list[str] = []
+                for c in range(tbl.columnCount()):
+                    it = tbl.item(r, c)
+                    row.append(it.text() if it else "")
+                rows.append(row)
+            return rows
+
+        cold_rows = tbl_data(self.cold_table)
+        hot_rows = tbl_data(self.hot_table)
+
+        # Заголовки разделов
+        ax1.text(
+            0.01, 1.02, self.tr("Холодный поток"), fontsize=11, ha="left", va="bottom"
+        )
+        ax2.text(
+            0.01, 1.02, self.tr("Горячий поток"), fontsize=11, ha="left", va="bottom"
+        )
+
+        # Рисуем таблицы
+        t1 = ax1.table(
+            cellText=cold_rows, colLabels=headers, loc="upper left", cellLoc="left"
+        )
+        t2 = ax2.table(
+            cellText=hot_rows, colLabels=headers, loc="upper left", cellLoc="left"
+        )
+        for t in (t1, t2):
+            try:
+                t.auto_set_font_size(False)
+                t.set_fontsize(8)
+                t.scale(1, 1.2)
+            except Exception:
+                pass
+        # Отступы страницы из настроек (Report/TablesTightRect)
+        try:
+            s = QSettings()
+            rect_str = s.value("Report/TablesTightRect", "0.02,0.02,0.98,0.98")
+            l, b, r, t = [float(p.strip()) for p in str(rect_str).split(",")]
+            fig.tight_layout(rect=(l, b, r, t))
+        except Exception:
+            fig.tight_layout(rect=(0.02, 0.02, 0.98, 0.98))
+        return fig
+
+    def _add_page_number(self, fig: Figure, idx: int, total: int):
+        """Добавляет номер страницы внизу фигуры и возвращает созданный Text (или None)."""
+        try:
+            s = QSettings()
+            footer_y = float(s.value("Report/PageNumberY", 0.02))
+        except Exception:
+            footer_y = 0.02
+        try:
+            txt = self.tr("Стр. {idx} из {total}").format(idx=idx, total=total)
+        except Exception:
+            txt = f"{idx} / {total}"
+        try:
+            return fig.text(
+                0.5,
+                footer_y,
+                txt,
+                ha="center",
+                va="bottom",
+                fontsize=8,
+                color="#555555",
+            )
+        except Exception:
+            return None
+
+    def _on_export_data(self) -> None:
+        # Экспорт данных анализа в Excel/CSV
+        if not self._last_series_x:
+            QMessageBox.information(
+                self, self.tr("Экспорт данных"), self.tr("Нет данных для экспорта.")
+            )
+            return
+        default_name = (
+            f"HeatSim-Analysis-Data-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+        )
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            self.tr("Сохранить данные анализа"),
+            str(Path.home() / f"{default_name}.xlsx"),
+            self.tr("Excel (*.xlsx);;CSV (*.csv)"),
+        )
+        if not path:
+            return
+
+        # Подготовка табличных данных графиков (long format)
+        rows_q: list[tuple[str, float, float]] = []  # (series, x, q)
+        rows_s: list[tuple[str, float, float]] = []  # (series, x, sigma)
+        rows_k: list[tuple[str, float, float]] = []  # (series, x, k)
+        for label, xs in self._last_series_x.items():
+            qs = self._last_series_q.get(label, [])
+            ss = self._last_series_sigma.get(label, [])
+            ks = self._last_series_k.get(label, [])
+            for i, x in enumerate(xs):
+                qv = float(qs[i]) if i < len(qs) else float("nan")
+                sv = float(ss[i]) if i < len(ss) else float("nan")
+                kv = float(ks[i]) if i < len(ks) else float("nan")
+                rows_q.append((label, float(x), qv))
+                rows_s.append((label, float(x), sv))
+                rows_k.append((label, float(x), kv))
+
+        def read_table(tbl: QTableWidget) -> list[list[str]]:
+            out: list[list[str]] = []
+            headers: list[str] = []
+            for c in range(tbl.columnCount()):
+                hi = tbl.horizontalHeaderItem(c)
+                headers.append(hi.text() if hi is not None else f"col{c}")
+            out.append(headers)
+            for r in range(tbl.rowCount()):
+                row: list[str] = []
+                for c in range(tbl.columnCount()):
+                    it = tbl.item(r, c)
+                    row.append(it.text() if it else "")
+                out.append(row)
+            return out
+
+        cold_tab = read_table(self.cold_table)
+        hot_tab = read_table(self.hot_table)
+
+        if path.lower().endswith(".xlsx"):
+            try:
+                import openpyxl  # type: ignore
+            except Exception as e:
+                QMessageBox.warning(
+                    self,
+                    self.tr("Экспорт данных"),
+                    self.tr(
+                        "Не удалось импортировать openpyxl для экспорта Excel: {err}"
+                    ).format(err=str(e)),
+                )
+                return
+            try:
+                wb = openpyxl.Workbook()
+                # Q sheet
+                wsq = wb.active
+                try:
+                    setattr(wsq, "title", "Q")
+                except Exception:
+                    pass
+                _append = getattr(wsq, "append", None)
+                if callable(_append):
+                    _append([self.tr("Серия"), "x", "Q (кВт)"])
+                    for s, x, v in rows_q:
+                        _append([s, x, v])
+                # Sigma
+                wss = wb.create_sheet("Sigma")
+                if hasattr(wss, "append"):
+                    wss.append([self.tr("Серия"), "x", self.tr("σ (кВт/К)")])
+                    for s, x, v in rows_s:
+                        wss.append([s, x, v])
+                # K
+                wsk = wb.create_sheet("K")
+                if hasattr(wsk, "append"):
+                    wsk.append([self.tr("Серия"), "x", self.tr("K (кВт/К)")])
+                    for s, x, v in rows_k:
+                        wsk.append([s, x, v])
+                # Mix tables
+                wcm = wb.create_sheet("ColdMix")
+                if hasattr(wcm, "append"):
+                    for row in cold_tab:
+                        wcm.append(row)
+                whm = wb.create_sheet("HotMix")
+                if hasattr(whm, "append"):
+                    for row in hot_tab:
+                        whm.append(row)
+                wb.save(path)
+                QMessageBox.information(
+                    self,
+                    self.tr("Экспорт данных"),
+                    self.tr("Данные сохранены в Excel: {p}").format(p=path),
+                )
+            except Exception as e:
+                QMessageBox.critical(
+                    self,
+                    self.tr("Экспорт данных"),
+                    self.tr("Ошибка при сохранении Excel: {err}").format(err=str(e)),
+                )
+        else:
+            # CSV: основной файл для графиков в long-формате + 2 отдельных CSV для смесей
+            try:
+                with open(path, "w", newline="", encoding="utf-8") as f:
+                    w = csv.writer(f)
+                    w.writerow(
+                        [self.tr("Серия"), self.tr("Метрика"), "x", self.tr("Значение")]
+                    )
+                    for s, x, v in rows_q:
+                        w.writerow([s, "Q (кВт)", x, v])
+                    for s, x, v in rows_s:
+                        w.writerow([s, self.tr("σ (кВт/К)"), x, v])
+                    for s, x, v in rows_k:
+                        w.writerow([s, self.tr("K (кВт/К)"), x, v])
+                base = Path(path)
+                cold_path = base.with_name(base.stem + "_cold_mix.csv")
+                hot_path = base.with_name(base.stem + "_hot_mix.csv")
+                with open(cold_path, "w", newline="", encoding="utf-8") as f:
+                    w = csv.writer(f)
+                    for row in cold_tab:
+                        w.writerow(row)
+                with open(hot_path, "w", newline="", encoding="utf-8") as f:
+                    w = csv.writer(f)
+                    for row in hot_tab:
+                        w.writerow(row)
+                QMessageBox.information(
+                    self,
+                    self.tr("Экспорт данных"),
+                    self.tr("CSV сохранены: {main}\nи таблицы: {c}\n{h}").format(
+                        main=str(path), c=str(cold_path), h=str(hot_path)
+                    ),
+                )
+            except Exception as e:
+                QMessageBox.critical(
+                    self,
+                    self.tr("Экспорт данных"),
+                    self.tr("Ошибка при сохранении CSV: {err}").format(err=str(e)),
+                )
 
 
 class _ExportPdfOptionsDialog(QDialog):
@@ -1085,6 +1412,9 @@ class _ExportPdfOptionsDialog(QDialog):
         v = QVBoxLayout(self)
         self.lbl = QLabel(self.tr("Что экспортировать?"))
         v.addWidget(self.lbl)
+        # Опция включить таблицы исходных данных
+        self.chk_tables = QCheckBox(self.tr("Включить таблицы исходных данных"))
+        v.addWidget(self.chk_tables)
         hb = QHBoxLayout()
         v.addLayout(hb)
         self.btn_combined = QPushButton(self.tr("Комбинированные"))
@@ -1094,17 +1424,18 @@ class _ExportPdfOptionsDialog(QDialog):
         hb.addWidget(self.btn_split)
         hb.addWidget(self.btn_both)
         # Результат
-        self._choice: tuple[bool, bool] | None = None
+        self._choice: tuple[bool, bool, bool] | None = None
         self.btn_combined.clicked.connect(lambda: self._set_choice(True, False))
         self.btn_split.clicked.connect(lambda: self._set_choice(False, True))
         self.btn_both.clicked.connect(lambda: self._set_choice(True, True))
 
     def _set_choice(self, combined: bool, split: bool) -> None:
-        self._choice = (combined, split)
+        include_tables = bool(self.chk_tables.isChecked())
+        self._choice = (combined, split, include_tables)
         self.accept()
 
     @staticmethod
-    def ask(parent: QWidget) -> tuple[bool, bool] | None:
+    def ask(parent: QWidget) -> tuple[bool, bool, bool] | None:
         dlg = _ExportPdfOptionsDialog(parent)
         rc = dlg.exec_()
         return dlg._choice if rc == QDialog.Accepted else None
