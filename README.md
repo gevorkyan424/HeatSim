@@ -90,6 +90,7 @@ Get-Content .\HeatSim.exe.sha256
 - **Публикация релиза**
 - **Отладка**
  - **Темы и локализация**
+ - **Release Notes**
 
 ## Возможности
 
@@ -365,5 +366,14 @@ Get-Content .\dist\HeatSim-Setup-v1.10.exe.sha256
 Get-FileHash -Algorithm SHA256 .\dist\HeatSim.exe
 Get-Content .\dist\HeatSim.exe.sha256
 ```
+
+## Release Notes
+
+Подробные заметки о релизах (расширенные изменения):
+
+- [v1.10](RELEASE_NOTES_v1.10.md)
+- [v1.6](RELEASE_NOTES_v1.6.md)
+
+Для промежуточных версий (1.7–1.9) основные изменения отражены в разделе краткого changelog выше.
 
 
